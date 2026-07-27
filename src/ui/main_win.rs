@@ -836,14 +836,35 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(&gtk4::Separator::new(Orientation::Horizontal));
 
+    // Phase 2 note
+    b.append(
+        &Label::builder()
+            .label(
+                "ℹ  BTRFS snapshots must reside on the same BTRFS volume as the source.  \
+                 To back up to an external ext4 drive, use 'btrfs send / btrfs receive' \
+                 (Phase 2 — not yet implemented in this GUI).",
+            )
+            .halign(Align::Start)
+            .wrap(true)
+            .css_classes(vec!["dim-label"])
+            .margin_bottom(4)
+            .build(),
+    );
+
     // ── Snapshot storage path ───────────────────────────────────────
-    let dest = cfg.borrow().dest_dir.clone();
     let source_base = std::path::Path::new(&source)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    let default_snap_dir = format!("{}/.btrfs-snapshots", dest);
+    // Default to a sibling directory on the same BTRFS volume as the source,
+    // NOT on the external backup drive which may be ext4.
+    let source_parent = std::path::Path::new(&source)
+        .parent()
+        .unwrap_or(std::path::Path::new("/"))
+        .to_string_lossy()
+        .into_owned();
+    let default_snap_dir = format!("{}/.snapshots", source_parent);
 
     b.append(&field_label("Snapshot storage path:"));
     let snap_row = GBox::new(Orientation::Horizontal, 8);
@@ -961,11 +982,20 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 let snap_name = format!("{}-{}", source_base, stamp);
                 let snap_path = format!("{}/{}", snap_dir, snap_name);
 
-                if let Err(e) = std::fs::create_dir_all(&snap_dir) {
-                    create_lbl.set_text(&format!("❌  Could not create snapshot dir: {e}"));
+                // Validate that the chosen path is on BTRFS.
+                if crate::drives::detect_fstype(&snap_dir).as_deref() != Some("btrfs") {
+                    create_lbl.set_text(
+                        "❌  Snapshot path is not on a BTRFS filesystem.  \
+                         Choose a location on the same BTRFS volume as the source \
+                         (e.g. /home/.snapshots).",
+                    );
                     return;
                 }
-
+                if let Err(e) = std::fs::create_dir_all(&snap_dir) {
+                    create_lbl
+                        .set_text(&format!("❌  Could not create snapshot dir: {e}"));
+                    return;
+                }
                 match std::process::Command::new("btrfs")
                     .args(["subvolume", "snapshot", "-r", &source, &snap_path])
                     .output()
