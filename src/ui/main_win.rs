@@ -1267,12 +1267,15 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                             .args(["-U", &uuid])
                             .output()
                         {
-                            let dev =
-                                String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+                            let dev = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
                             if !dev.is_empty() {
                                 let _ = std::process::Command::new("udisksctl")
-                                    .args(["mount", "--block-device", &dev,
-                                           "--no-user-interaction"])
+                                    .args([
+                                        "mount",
+                                        "--block-device",
+                                        &dev,
+                                        "--no-user-interaction",
+                                    ])
                                     .output();
                             }
                         }
