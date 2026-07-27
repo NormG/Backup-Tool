@@ -652,10 +652,16 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
     dest_row.append(&dest_browse);
     b.append(&dest_row);
 
-    // Drive info (read-only)
+    // Drive info (read-only) — fall back to live detection if not saved in config
+    let detected_label = cfg
+        .borrow()
+        .drive_label
+        .clone()
+        .or_else(|| crate::drives::detect_label_for_path(&cfg.borrow().dest_dir))
+        .unwrap_or_else(|| "(unlabelled)".to_string());
     let drive_info = format!(
         "Drive label: {}   UUID: {}",
-        cfg.borrow().drive_label.as_deref().unwrap_or("(not set)"),
+        detected_label,
         cfg.borrow().drive_uuid.as_deref().unwrap_or("(not set)"),
     );
     b.append(
