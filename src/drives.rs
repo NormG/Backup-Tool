@@ -225,6 +225,47 @@ pub fn is_same_device(a: &std::path::Path, b: &std::path::Path) -> bool {
     matches!((dev_of(a), dev_of(b)), (Some(da), Some(db)) if da == db)
 }
 
+/// Detect the filesystem label of the partition that **contains** `path`.
+///
+/// Useful when `Config::drive_label` is `None` (e.g. the user typed the
+/// destination path manually rather than choosing from the dropdown).
+/// Uses `findmnt` to resolve the block device and `lsblk` to read its label.
+/// Returns `None` when either tool fails or the label is empty.
+pub fn detect_label_for_path(path: &str) -> Option<String> {
+    // Walk up to the nearest existing ancestor so it works on paths that
+    // haven't been created yet.
+    let resolved = {
+        let mut p = std::path::Path::new(path);
+        loop {
+            if p.exists() { break p.to_path_buf(); }
+            p = p.parent()?;
+        }
+    };
+
+    // Find the source device for the resolved path.
+    let dev_out = Command::new("findmnt")
+        .args(["--noheadings", "-o", "SOURCE", "--target",
+               &resolved.to_string_lossy().into_owned()])
+        .output()
+        .ok()?;
+    let source = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+    if source.is_empty() {
+        return None;
+    }
+
+    // Query the label for that device.
+    let lbl_out = Command::new("lsblk")
+        .args(["-n", "-o", "LABEL", &source])
+        .output()
+        .ok()?;
+    let label = String::from_utf8_lossy(&lbl_out.stdout).trim().to_string();
+    if label.is_empty() || label == "-" || label == "(null)" {
+        None
+    } else {
+        Some(label)
+    }
+}
+
 /// Find the current mountpoint of a partition with the given UUID by querying
 /// `/proc/mounts`.  Returns `None` if not currently mounted.
 pub fn find_mountpoint_by_uuid(uuid: &str) -> Option<String> {

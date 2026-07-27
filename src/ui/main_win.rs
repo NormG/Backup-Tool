@@ -245,6 +245,14 @@ fn status_text(cfg: &Config) -> String {
         "inactive ⚠"
     };
     let timer_line = systemd::timer_status_line();
+
+    // Use the saved label; if not set, detect it live from the destination path.
+    let drive_label = cfg
+        .drive_label
+        .clone()
+        .or_else(|| crate::drives::detect_label_for_path(&cfg.dest_dir))
+        .unwrap_or_else(|| "(unlabelled)".to_string());
+
     format!(
         "Source          : {}\n\
          Destination     : {}\n\
@@ -256,7 +264,7 @@ fn status_text(cfg: &Config) -> String {
          {}",
         cfg.source_dir,
         cfg.dest_dir,
-        cfg.drive_label.as_deref().unwrap_or("(not set)"),
+        drive_label,
         cfg.full_backup_day,
         cfg.backup_time,
         cfg.retention_days,
@@ -310,9 +318,11 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     }
     b.append(&day_combo);
 
-    // Time
-    b.append(&field_label("Daily backup time (24-hour HH:MM):"));
+    // Time — 12h / 24h toggle
+    b.append(&field_label("Daily backup time:"));
     let (stored_h, stored_m) = cfg.borrow().backup_hm();
+    let is_24h_time: Rc<RefCell<bool>> = Rc::new(RefCell::new(true));
+
     let time_row = GBox::new(Orientation::Horizontal, 8);
 
     let adj_h = gtk4::Adjustment::new(f64::from(stored_h), 0.0, 23.0, 1.0, 1.0, 0.0);
@@ -324,7 +334,53 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     let min_spin = SpinButton::new(Some(&adj_m), 1.0, 0);
     min_spin.set_width_chars(3);
     time_row.append(&min_spin);
+
+    // 24h suffix / AM-PM picker (mutually exclusive)
+    let suffix_lbl = Label::new(Some("Hrs"));
+    let ampm_combo_time = ComboBoxText::new();
+    ampm_combo_time.append_text("AM");
+    ampm_combo_time.append_text("PM");
+    ampm_combo_time.set_active(Some(if stored_h >= 12 { 1 } else { 0 }));
+    ampm_combo_time.set_visible(false);
+
+    let fmt_btn = Button::with_label("12h");
+    time_row.append(&suffix_lbl);
+    time_row.append(&ampm_combo_time);
+    time_row.append(&fmt_btn);
     b.append(&time_row);
+
+    // Toggle between 24h and 12h display.
+    {
+        let is_24h_time = Rc::clone(&is_24h_time);
+        let hour_spin = hour_spin.clone();
+        let suffix_lbl = suffix_lbl.clone();
+        let ampm_combo_time = ampm_combo_time.clone();
+        fmt_btn.connect_clicked(move |btn| {
+            if *is_24h_time.borrow() {
+                // Switch to 12h
+                let h24 = hour_spin.value() as u8;
+                let (h12, pm) = h24_to_12h(h24);
+                ampm_combo_time.set_active(Some(if pm { 1 } else { 0 }));
+                hour_spin.set_range(1.0, 12.0);
+                hour_spin.set_value(f64::from(h12));
+                suffix_lbl.set_visible(false);
+                ampm_combo_time.set_visible(true);
+                btn.set_label("24h");
+                *is_24h_time.borrow_mut() = false;
+            } else {
+                // Switch to 24h
+                let h12 = hour_spin.value() as u8;
+                let pm = ampm_combo_time.active() == Some(1);
+                let h24 = h12_to_24h(h12, pm);
+                hour_spin.set_range(0.0, 23.0);
+                hour_spin.set_value(f64::from(h24));
+                suffix_lbl.set_visible(true);
+                ampm_combo_time.set_visible(false);
+                btn.set_label("12h");
+                *is_24h_time.borrow_mut() = true;
+            }
+        });
+    }
 
     // Retention
     b.append(&field_label("Keep incremental snapshots for (days):"));
@@ -374,8 +430,14 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
                 .active_text()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "Monday".to_string());
-            let h = hour_spin.value() as u8;
+            let h_raw = hour_spin.value() as u8;
             let m = min_spin.value() as u8;
+            let h = if *is_24h_time.borrow() {
+                h_raw
+            } else {
+                let pm = ampm_combo_time.active() == Some(1);
+                h12_to_24h(h_raw, pm)
+            };
             let ret = ret_spin.value() as u32;
             let inc = inc_spin.value() as u32;
             {
@@ -702,6 +764,28 @@ fn load_log(tv: &TextView) {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+// ── Clock conversion helpers ─────────────────────────────────────────────────
+
+/// 24-hour hour → (12-hour display value, is_pm)
+fn h24_to_12h(h24: u8) -> (u8, bool) {
+    match h24 {
+        0       => (12, false),
+        1..=11  => (h24, false),
+        12      => (12, true),
+        h       => (h - 12, true),
+    }
+}
+
+/// 12-hour display value + AM/PM flag → 24-hour hour
+fn h12_to_24h(h12: u8, pm: bool) -> u8 {
+    match (pm, h12) {
+        (false, 12) => 0,
+        (false, h)  => h,
+        (true,  12) => 12,
+        (true,  h)  => h + 12,
+    }
+}
 
 fn tab_box() -> GBox {
     let b = GBox::new(Orientation::Vertical, 12);
