@@ -1051,7 +1051,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         refresh_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
-            move |_| { btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref) }
+            move |_| btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref)
         ));
     }
 
