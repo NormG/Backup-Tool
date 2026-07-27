@@ -1729,15 +1729,14 @@ fn btrfs_do_send(
     send_cmd.arg(snap_path);
     send_cmd.stdout(Stdio::piped());
     send_cmd.stderr(Stdio::piped());
-
     let mut send_child = send_cmd
         .spawn()
         .context("'btrfs' not found — install with: sudo dnf install btrfs-progs")?;
     let send_stdout = send_child.stdout.take().expect("btrfs send stdout");
 
     // Pipe through `gzip -c` into the destination file.
-    let dest_out =
-        std::fs::File::create(dest_file).with_context(|| format!("creating {dest_file}"))?;
+    let dest_out = std::fs::File::create(dest_file)
+        .with_context(|| format!("creating {dest_file}"))?;
     let mut gzip_child = Command::new("gzip")
         .args(["-c", "-"])
         .stdin(Stdio::from(send_stdout))
@@ -1748,8 +1747,9 @@ fn btrfs_do_send(
     let send_status = send_child.wait().context("waiting for btrfs send")?;
     let gzip_status = gzip_child.wait().context("waiting for gzip")?;
 
+    let mut used_pkexec = false;
+
     if !send_status.success() {
-        // Read stderr for a useful message.
         let stderr = send_child
             .stderr
             .take()
@@ -1760,14 +1760,45 @@ fn btrfs_do_send(
                 s
             })
             .unwrap_or_default();
-        let hint = if stderr.to_lowercase().contains("permission") {
-            format!("\nRun manually: btrfs send {snap_path} | gzip -c > {dest_file}")
+
+        let needs_root = stderr.to_lowercase().contains("not permitted")
+            || stderr.to_lowercase().contains("permission");
+
+        if needs_root {
+            // btrfs send requires root. Retry via pkexec sh -c so the
+            // full btrfs send | gzip pipeline runs as root.
+            let parent_flag = parent_path
+                .map(|p| format!("-p {} ", p))
+                .unwrap_or_default();
+            let sh_cmd = format!(
+                "btrfs send {parent_flag}{snap_path} | gzip -c > {dest_file}"
+            );
+            let elev = Command::new("pkexec")
+                .args(["sh", "-c", &sh_cmd])
+                .output();
+            match elev {
+                Ok(o) if o.status.success() => {
+                    // Elevated send succeeded — skip the gzip check below.
+                    used_pkexec = true;
+                }
+                Ok(o) => {
+                    anyhow::bail!(
+                        "btrfs send failed (elevated): {}",
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "btrfs send needs root but pkexec unavailable ({e}).\n\
+                         Run manually: sudo sh -c '{sh_cmd}'"
+                    );
+                }
+            }
         } else {
-            String::new()
-        };
-        anyhow::bail!("btrfs send failed: {}{hint}", stderr.trim());
+            anyhow::bail!("btrfs send failed: {}", stderr.trim());
+        }
     }
-    if !gzip_status.success() {
+    if !used_pkexec && !gzip_status.success() {
         anyhow::bail!("gzip failed");
     }
 
