@@ -262,7 +262,7 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
         // the date regardless of prefix length.
         if let Some(prefix_end) = name.find('-') {
             let date_start = prefix_end + 1;
-            let date_end   = date_start + 10; // "YYYY-MM-DD" is always 10 chars
+            let date_end = date_start + 10; // "YYYY-MM-DD" is always 10 chars
             if let Some(date_str) = name.get(date_start..date_end) {
                 if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                     let today_date = Local::now().date_naive();
