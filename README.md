@@ -213,6 +213,17 @@ immediately.
 Hardlinked files in incremental snapshots appear as complete directories but
 share disk blocks with the full (or previous incremental) they were derived from.
 
+**A few things worth knowing about disk usage and pruning:**
+
+- **Full backups are never automatically pruned** — only incrementals older than
+  `retention_days` are deleted.  Full snapshots accumulate until you remove them
+  manually, so periodically review and delete old ones to free space.
+- **Each full backup is a complete copy** — no hardlinks from previous fulls, so
+  every weekly full uses roughly the same space as your home directory.  Plan
+  drive capacity accordingly (e.g. 3 full backups + 6 incrementals each week).
+- **Incrementals reset after each full** — on the day after a full backup,
+  incrementals begin hardlinking from the new full, so they stay lean again.
+
 ---
 
 ## Systemd Units
@@ -282,7 +293,7 @@ home-backup2/
 │   └── ui/
 │       ├── mod.rs        GTK Application bootstrap
 │       ├── install.rs    First-run setup wizard (7-page Stack)
-│       └── main_win.rs   Management window (4-tab Notebook)
+│       └── main_win.rs   Management window (5-tab Notebook)
 ├── assets/
 │   ├── home-backup.png   128×128 app icon
 │   ├── home-backup.svg   Scalable app icon
