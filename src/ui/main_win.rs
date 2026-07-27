@@ -21,7 +21,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .application(app)
         .title("Home Backup Manager")
         .default_width(720)
-        .default_height(540)
+        .default_height(460)
         .build();
 
     let nb = Notebook::new();
@@ -45,7 +45,14 @@ pub fn show(app: &gtk4::Application, config: Config) {
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
     // BTRFS before About so About is always the rightmost tab.
-    let btrfs_page = build_btrfs_tab(Rc::clone(&cfg));
+    // Wrap in a ScrolledWindow so the window can be resized smaller than the
+    // tab's natural height without clipping content.
+    let btrfs_page = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vexpand(true)
+        .build();
+    btrfs_page.set_child(Some(&build_btrfs_tab(Rc::clone(&cfg))));
     nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
 
     // About is always last (rightmost).
@@ -1162,7 +1169,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     let send_list = ListBox::builder()
         .selection_mode(SelectionMode::Single)
         .build();
-    let send_list_sw = ScrolledWindow::builder().min_content_height(100).build();
+    let send_list_sw = ScrolledWindow::builder().min_content_height(70).build();
     let send_list_frame = Frame::new(None);
     send_list_sw.set_child(Some(&send_list));
     send_list_frame.set_child(Some(&send_list_sw));
@@ -1183,7 +1190,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .set_text("Select an archive from the list above.");
     let recv_sw = ScrolledWindow::builder()
         .vexpand(false)
-        .min_content_height(100)
+        .min_content_height(75)
         .build();
     recv_sw.set_child(Some(&recv_tv));
     let recv_frame = Frame::new(None);
@@ -1247,6 +1254,37 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 let parent_path = parent_name.map(|p| format!("{}/{}", snap_dir_str, p));
                 let dest_dir = send_dest_entry.text().to_string();
                 let dest_file = format!("{}/{}.btrfs.gz", dest_dir, snap_name);
+
+                // Verify destination is accessible; attempt auto-mount via UUID.
+                let dest_parent = std::path::Path::new(&dest_dir)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_default();
+                if !dest_parent.exists() {
+                    if let Some(uuid) = cfg.borrow().drive_uuid.clone() {
+                        send_lbl.set_text("⏳  Drive not mounted — attempting mount…");
+                        if let Ok(dev_out) = std::process::Command::new("blkid")
+                            .args(["-U", &uuid])
+                            .output()
+                        {
+                            let dev =
+                                String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+                            if !dev.is_empty() {
+                                let _ = std::process::Command::new("udisksctl")
+                                    .args(["mount", "--block-device", &dev,
+                                           "--no-user-interaction"])
+                                    .output();
+                            }
+                        }
+                    }
+                    if !dest_parent.exists() {
+                        send_lbl.set_text(
+                            "❌  Destination drive is not mounted.  \
+                             Mount it first or update the destination path.",
+                        );
+                        return;
+                    }
+                }
 
                 btn.set_sensitive(false);
                 send_lbl.set_text("⏳  Sending — this may take a while…");
