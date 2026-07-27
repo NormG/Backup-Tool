@@ -852,9 +852,8 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     // Copyable one-time setup command
     let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
-    let setup_cmd = format!(
-        "sudo mkdir -p /home/.snapshots && sudo chown {user}:{user} /home/.snapshots"
-    );
+    let setup_cmd =
+        format!("sudo mkdir -p /home/.snapshots && sudo chown {user}:{user} /home/.snapshots");
     b.append(
         &gtk4::Entry::builder()
             .text(&setup_cmd)
