@@ -563,8 +563,11 @@ fn build_schedule(
     ampm_combo_time.set_active(Some(if stored_h >= 12 { 1 } else { 0 }));
     ampm_combo_time.set_visible(false);
     let fmt_btn = Button::with_label("Use 12 hr");
+    fmt_btn.set_halign(gtk4::Align::End);
     time_row.append(&suffix_lbl);
     time_row.append(&ampm_combo_time);
+    let tspc = gtk4::Label::builder().hexpand(true).build();
+    time_row.append(&tspc);
     time_row.append(&fmt_btn);
     b.append(&time_row);
 

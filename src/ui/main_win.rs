@@ -354,8 +354,12 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     ampm_combo_time.set_visible(false);
 
     let fmt_btn = Button::with_label("Use 12 hr");
+    fmt_btn.set_halign(gtk4::Align::End);
     time_row.append(&suffix_lbl);
     time_row.append(&ampm_combo_time);
+    // Expanding spacer pushes the toggle button to the right edge of the tab.
+    let tspc = gtk4::Label::builder().hexpand(true).build();
+    time_row.append(&tspc);
     time_row.append(&fmt_btn);
     b.append(&time_row);
 
