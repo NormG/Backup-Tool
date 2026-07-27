@@ -16,3 +16,4 @@ Thumbs.db
 # Runtime artefacts (never commit real user config or logs)
 *.log
 /tmp/
+vendor/
