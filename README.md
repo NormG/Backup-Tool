@@ -51,7 +51,7 @@ hardlinked so they consume no extra disk space.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 ./package-rpm.sh                          # build the .rpm (~3 min first run)
-sudo dnf install ~/rpmbuild/RPMS/x86_64/home-backup-0.1.6-1.fc.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/home-backup-0.1.6-1.fc44.x86_64.rpm
 home-backup                               # launch wizard
 ```
 
