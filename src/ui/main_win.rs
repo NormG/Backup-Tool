@@ -1314,7 +1314,9 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 let parent_name = parent_combo
                     .active_text()
                     .filter(|s| !s.starts_with("—"))
-                    .map(|s| s.to_string());
+                    .map(|s| s.to_string())
+                    // Ignore parent if it's the same snapshot (would be invalid).
+                    .filter(|p| p != &snap_name);
                 let snap_path = format!("{}/{}", snap_dir_str, snap_name);
                 let parent_path = parent_name.map(|p| format!("{}/{}", snap_dir_str, p));
                 let dest_dir = send_dest_entry.text().to_string();
@@ -1718,10 +1720,11 @@ fn btrfs_do_send(
     }
 
     // Build `btrfs send` child.
+    // Note: the flag is `-p`, not `--parent` (short option only).
     let mut send_cmd = Command::new("btrfs");
     send_cmd.arg("send");
     if let Some(p) = parent_path {
-        send_cmd.args(["--parent", p]);
+        send_cmd.args(["-p", p]);
     }
     send_cmd.arg(snap_path);
     send_cmd.stdout(Stdio::piped());
