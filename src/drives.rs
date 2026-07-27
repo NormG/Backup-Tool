@@ -230,12 +230,21 @@ pub fn detect_fstype(path: &str) -> Option<String> {
         }
     };
     let out = Command::new("findmnt")
-        .args(["--noheadings", "-o", "FSTYPE", "--target",
-               resolved.to_string_lossy().as_ref()])
+        .args([
+            "--noheadings",
+            "-o",
+            "FSTYPE",
+            "--target",
+            resolved.to_string_lossy().as_ref(),
+        ])
         .output()
         .ok()?;
     let fstype = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if fstype.is_empty() { None } else { Some(fstype) }
+    if fstype.is_empty() {
+        None
+    } else {
+        Some(fstype)
+    }
 }
 
 /// Returns `true` when `a` and `b` reside on the **same filesystem** (same

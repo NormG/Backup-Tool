@@ -809,7 +809,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(
         &Label::builder()
-            .label(&format!(
+            .label(format!(
                 "Source filesystem: {}",
                 fstype.as_deref().unwrap_or("unknown")
             ))
@@ -881,24 +881,24 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     let list_box = ListBox::builder()
         .selection_mode(SelectionMode::Single)
         .build();
-    let list_sw = ScrolledWindow::builder()
-        .min_content_height(130)
-        .build();
+    let list_sw = ScrolledWindow::builder().min_content_height(130).build();
     let list_frame = Frame::new(None);
     list_sw.set_child(Some(&list_box));
     list_frame.set_child(Some(&list_sw));
     b.append(&list_frame);
 
     // ── Recovery instructions ──────────────────────────────────────────
-    b.append(&field_label("Recovery instructions (select a snapshot above):"));
+    b.append(&field_label(
+        "Recovery instructions (select a snapshot above):",
+    ));
     let instr_tv = TextView::builder()
         .monospace(true)
         .editable(false)
         .wrap_mode(WrapMode::Word)
         .build();
-    instr_tv.buffer().set_text(
-        "Select a snapshot from the list above to see recovery instructions.",
-    );
+    instr_tv
+        .buffer()
+        .set_text("Select a snapshot from the list above to see recovery instructions.");
     let instr_sw = ScrolledWindow::builder()
         .vexpand(true)
         .min_content_height(160)
@@ -957,15 +957,12 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
             list_box,
             move |_| {
                 let snap_dir = snap_entry.text().to_string();
-                let stamp = chrono::Local::now()
-                    .format("%Y-%m-%d_%H%M%S")
-                    .to_string();
+                let stamp = chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string();
                 let snap_name = format!("{}-{}", source_base, stamp);
                 let snap_path = format!("{}/{}", snap_dir, snap_name);
 
                 if let Err(e) = std::fs::create_dir_all(&snap_dir) {
-                    create_lbl
-                        .set_text(&format!("❌  Could not create snapshot dir: {e}"));
+                    create_lbl.set_text(&format!("❌  Could not create snapshot dir: {e}"));
                     return;
                 }
 
@@ -974,15 +971,11 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     .output()
                 {
                     Ok(o) if o.status.success() => {
-                        create_lbl.set_text(&format!(
-                            "✅  Snapshot created: {}",
-                            snap_name
-                        ));
+                        create_lbl.set_text(&format!("✅  Snapshot created: {}", snap_name));
                         btrfs_populate_list(&list_box, &snap_dir, &source_base);
                     }
                     Ok(o) => {
-                        let err =
-                            String::from_utf8_lossy(&o.stderr).trim().to_string();
+                        let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
                         create_lbl.set_text(&format!("❌  btrfs error: {err}"));
                     }
                     Err(_) => {
@@ -1017,18 +1010,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
             move |btn| {
                 if let Some(row) = list_box.selected_row() {
                     let name = row.widget_name().to_string();
-                    let snap_path =
-                        format!("{}/{}", snap_entry.text(), name);
+                    let snap_path = format!("{}/{}", snap_entry.text(), name);
                     match std::process::Command::new("btrfs")
                         .args(["subvolume", "delete", &snap_path])
                         .output()
                     {
                         Ok(o) if o.status.success() => {
-                            btrfs_populate_list(
-                                &list_box,
-                                &snap_entry.text(),
-                                "",
-                            );
+                            btrfs_populate_list(&list_box, &snap_entry.text(), "");
                             btn.set_sensitive(false);
                         }
                         Ok(o) => {
@@ -1126,7 +1114,11 @@ fn btrfs_instructions(snap_name: &str, snap_dir: &str) -> String {
         .ok()
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         })
         .unwrap_or_else(|| "/dev/<device>".to_string());
 
