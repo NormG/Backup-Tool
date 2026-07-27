@@ -260,7 +260,7 @@ pub fn detect_label_for_path(path: &str) -> Option<String> {
             "-o",
             "SOURCE",
             "--target",
-            &resolved.to_string_lossy().into_owned(),
+            resolved.to_string_lossy().as_ref(),
         ])
         .output()
         .ok()?;

@@ -160,7 +160,7 @@ pub fn timer_status_line() -> String {
             // We want columns 0 (NEXT timestamp) and 2 (LAST timestamp).
             if let Some(line) = s.lines().next() {
                 let cols: Vec<&str> = line.splitn(7, ' ').filter(|s| !s.is_empty()).collect();
-                let next = cols.get(0).copied().unwrap_or("—");
+                let next = cols.first().copied().unwrap_or("—");
                 let last = cols.get(2).copied().unwrap_or("—");
                 return format!("Next: {next}   Last: {last}");
             }

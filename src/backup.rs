@@ -210,7 +210,7 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
         let candidate = PathBuf::from(&mp);
         if !dest.starts_with(&candidate) {
             // dest_dir is an absolute path on the drive; create it.
-            fs::create_dir_all(dest).with_context(|| format!("creating dest dir after mount"))?;
+            fs::create_dir_all(dest).with_context(|| "creating dest dir after mount")?;
         }
 
         if dest.exists() {
@@ -284,7 +284,7 @@ fn resolve_latest(dest_root: &Path) -> Option<PathBuf> {
         .collect();
 
     // Sort by name descending (timestamps are sortable).
-    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
     entries.first().map(|e| e.path())
 }
 

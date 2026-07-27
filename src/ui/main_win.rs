@@ -724,7 +724,7 @@ fn build_log() -> GBox {
     );
 
     let log_lbl = Label::builder()
-        .label(&format!("Log file: {}", Config::log_path().display()))
+        .label(format!("Log file: {}", Config::log_path().display()))
         .halign(Align::Start)
         .selectable(true)
         .build();
