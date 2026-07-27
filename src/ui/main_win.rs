@@ -865,7 +865,7 @@ fn build_about() -> GBox {
     // Copyright
     b.append(
         &Label::builder()
-            .label("Copyright \u{00a9} 2026 norm.  Distributed under the GNU General Public License v3.")
+            .label("Copyright \u{00a9} 2026 veronalinux.ca.  Distributed under the GNU General Public License v3.")
             .halign(Align::Start)
             .wrap(true)
             .css_classes(vec!["dim-label"])
