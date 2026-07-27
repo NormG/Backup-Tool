@@ -1072,24 +1072,15 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         ));
     }
 
-    // Refresh list — use the actual Btrfs subvolume base (e.g. "home") as
-    // the prefix, not source_base (e.g. "norm"), because snapshots are named
-    // after the subvolume that was snapshotted, not the source directory.
+    // Refresh list — show everything in the snapshot directory (empty prefix)
+    // so no snapshot is ever hidden regardless of how it was named.
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
-        let source_for_refresh = source.clone();
         refresh_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
-            move |_| {
-                let actual_base = btrfs_find_subvol(&source_for_refresh)
-                    .as_deref()
-                    .and_then(|s| std::path::Path::new(s).file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                btrfs_populate_list(&list_box, &snap_entry.text(), &actual_base);
-            }
+            move |_| btrfs_populate_list(&list_box, &snap_entry.text(), "")
         ));
     }
 
