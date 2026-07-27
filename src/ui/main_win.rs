@@ -41,7 +41,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
 
     // ── Tab 4 — Settings (source / destination) ──────────────────────────────
     let settings_page = build_settings(Rc::clone(&cfg));
-    nb.append_page(&settings_page, Some(&Label::new(Some("Settings"))));
+    nb.append_page(&settings_page, Some(&Label::new(Some("Source/Destination"))));
 
     // ── Tab 5 — Log ───────────────────────────────────────────────────────────
     let log_page = build_log();
@@ -540,11 +540,39 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
 
     // ── Destination directory ─────────────────────────────────────────────
     b.append(&field_label("Backup destination path (on backup drive):"));
+    let dest_row = GBox::new(Orientation::Horizontal, 8);
     let dest_entry = gtk4::Entry::builder()
         .text(&cfg.borrow().dest_dir)
         .hexpand(true)
         .build();
-    b.append(&dest_entry);
+    let dest_browse = Button::with_label("Browse…");
+    {
+        let dest_entry = dest_entry.clone();
+        dest_browse.connect_clicked(move |btn| {
+            let chooser = FileChooserDialog::builder()
+                .title("Choose backup destination")
+                .action(FileChooserAction::SelectFolder)
+                .build();
+            chooser.add_button("Cancel", ResponseType::Cancel);
+            chooser.add_button("Select", ResponseType::Accept);
+            let dest_entry = dest_entry.clone();
+            chooser.connect_response(move |dlg, resp| {
+                if resp == ResponseType::Accept {
+                    if let Some(f) = dlg.file().and_then(|f| f.path()) {
+                        dest_entry.set_text(&f.to_string_lossy());
+                    }
+                }
+                dlg.close();
+            });
+            if let Some(w) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
+                chooser.set_transient_for(Some(&w));
+            }
+            chooser.present();
+        });
+    }
+    dest_row.append(&dest_entry);
+    dest_row.append(&dest_browse);
+    b.append(&dest_row);
 
     // Drive info (read-only)
     let drive_info = format!(
