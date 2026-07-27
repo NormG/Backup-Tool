@@ -1735,8 +1735,8 @@ fn btrfs_do_send(
     let send_stdout = send_child.stdout.take().expect("btrfs send stdout");
 
     // Pipe through `gzip -c` into the destination file.
-    let dest_out = std::fs::File::create(dest_file)
-        .with_context(|| format!("creating {dest_file}"))?;
+    let dest_out =
+        std::fs::File::create(dest_file).with_context(|| format!("creating {dest_file}"))?;
     let mut gzip_child = Command::new("gzip")
         .args(["-c", "-"])
         .stdin(Stdio::from(send_stdout))
@@ -1770,12 +1770,8 @@ fn btrfs_do_send(
             let parent_flag = parent_path
                 .map(|p| format!("-p {} ", p))
                 .unwrap_or_default();
-            let sh_cmd = format!(
-                "btrfs send {parent_flag}{snap_path} | gzip -c > {dest_file}"
-            );
-            let elev = Command::new("pkexec")
-                .args(["sh", "-c", &sh_cmd])
-                .output();
+            let sh_cmd = format!("btrfs send {parent_flag}{snap_path} | gzip -c > {dest_file}");
+            let elev = Command::new("pkexec").args(["sh", "-c", &sh_cmd]).output();
             match elev {
                 Ok(o) if o.status.success() => {
                     // Elevated send succeeded — skip the gzip check below.
