@@ -78,14 +78,21 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# Default to system-wide install so the binary is available to all users.
+# Pass --user to install only for the current user instead.
 if $SYSTEM_INSTALL; then
     INSTALL_BIN="/usr/local/bin"
     INSTALL_ASSETS="/usr/local/share/${BINARY_NAME}"
     NEED_SUDO=true
-else
-    INSTALL_BIN="${HOME}/.local/bin"
-    INSTALL_ASSETS="${HOME}/.local/share/${BINARY_NAME}"
+elif [[ "${USER_INSTALL:-false}" == "true" ]]; then
+    INSTALL_BIN="${REAL_HOME}/.local/bin"
+    INSTALL_ASSETS="${REAL_HOME}/.local/share/${BINARY_NAME}"
     NEED_SUDO=false
+else
+    # System-wide default (requires sudo)
+    INSTALL_BIN="/usr/local/bin"
+    INSTALL_ASSETS="/usr/local/share/${BINARY_NAME}"
+    NEED_SUDO=true
 fi
 
 INSTALLED_BIN="${INSTALL_BIN}/${BINARY_NAME}"
