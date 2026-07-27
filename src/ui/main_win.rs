@@ -836,12 +836,12 @@ fn build_about() -> GBox {
 
     // Details grid
     let details = [
-        ("License",     "GPL-3.0-or-later"),
-        ("Source",      "github.com/NormG/Backup-Tool"),
+        ("License", "GPL-3.0-or-later"),
+        ("Source", "github.com/NormG/Backup-Tool"),
         ("Backup tool", "rsync (atomic hardlinked snapshots)"),
-        ("Scheduler",   "systemd user timer — no root required"),
-        ("Config",      "~/.config/home-backup/config.toml"),
-        ("Log",         "~/.local/share/home-backup/backup.log"),
+        ("Scheduler", "systemd user timer — no root required"),
+        ("Config", "~/.config/home-backup/config.toml"),
+        ("Log", "~/.local/share/home-backup/backup.log"),
     ];
 
     for (key, val) in &details {
