@@ -44,13 +44,13 @@ pub fn show(app: &gtk4::Application, config: Config) {
     let log_page = build_log();
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
-    let about_page = build_about();
-    nb.append_page(&about_page, Some(&Label::new(Some("About"))));
-
-    // ── Tab 7 — BTRFS Snapshots ───────────────────────────────────────────────
+    // BTRFS before About so About is always the rightmost tab.
     let btrfs_page = build_btrfs_tab(Rc::clone(&cfg));
     nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
-    nb.set_tab_reorderable(&btrfs_page, false);
+
+    // About is always last (rightmost).
+    let about_page = build_about();
+    nb.append_page(&about_page, Some(&Label::new(Some("About"))));
 
     // Refresh the dashboard status label whenever the dashboard tab is shown.
     nb.connect_switch_page(glib::clone!(
@@ -1047,10 +1047,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
+        let source_base_ref = source_base.clone();
         refresh_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
-            move |_| btrfs_populate_list(&list_box, &snap_entry.text(), &source_base)
+            move |_| {
+                btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref)
+            }
         ));
     }
 
@@ -1082,6 +1085,216 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                         Err(e) => eprintln!("btrfs not found: {e}"),
                     }
                 }
+            }
+        ));
+    }
+
+    // ── Phase 2: Send to backup drive (ext4) ─────────────────────────────
+    let sep2 = gtk4::Separator::new(Orientation::Horizontal);
+    sep2.set_margin_top(8);
+    b.append(&sep2);
+    b.append(
+        &Label::builder()
+            .label("Send to Backup Drive")
+            .css_classes(vec!["title-3"])
+            .halign(Align::Start)
+            .build(),
+    );
+    b.append(
+        &Label::builder()
+            .label(
+                "Serialise a local BTRFS snapshot to a compressed .btrfs.gz file on any \
+                 filesystem (ext4, xfs, …). Restore with 'gunzip | btrfs receive'.",
+            )
+            .halign(Align::Start)
+            .wrap(true)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+
+    // Destination path for .btrfs.gz archives
+    let dest_cfg = cfg.borrow().dest_dir.clone();
+    let send_dest_default = format!("{}/.btrfs-send", dest_cfg);
+    b.append(&field_label("Destination for archives (.btrfs.gz):"));
+    let send_dest_entry = gtk4::Entry::builder()
+        .text(&send_dest_default)
+        .hexpand(true)
+        .build();
+    b.append(&send_dest_entry);
+
+    // Snapshot selectors
+    let selrow = GBox::new(Orientation::Horizontal, 8);
+    let snap_combo = ComboBoxText::new();
+    snap_combo.append_text("— select snapshot —");
+    snap_combo.set_active(Some(0));
+    snap_combo.set_hexpand(true);
+    let parent_combo = ComboBoxText::new();
+    parent_combo.append_text("— full send (no parent) —");
+    parent_combo.set_active(Some(0));
+    parent_combo.set_hexpand(true);
+    let refresh_send_btn = Button::with_label("↺");
+    selrow.append(&snap_combo);
+    selrow.append(&Label::new(Some("→")));
+    selrow.append(&parent_combo);
+    selrow.append(&refresh_send_btn);
+    b.append(&field_label("Snapshot to send  |  Parent (incremental):"));
+    b.append(&selrow);
+
+    // Populate combos from existing snapshots
+    btrfs_populate_combos(
+        &snap_combo,
+        &parent_combo,
+        &snap_entry.text(),
+        &source_base,
+    );
+
+    // Send button
+    let send_row = GBox::new(Orientation::Horizontal, 8);
+    let send_btn = Button::builder()
+        .label("Send Snapshot")
+        .css_classes(vec!["suggested-action"])
+        .build();
+    let send_lbl = Label::builder()
+        .halign(Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .build();
+    send_row.append(&send_btn);
+    send_row.append(&send_lbl);
+    b.append(&send_row);
+
+    // Sent archives list
+    b.append(&field_label("Sent archives:"));
+    let send_list = ListBox::builder()
+        .selection_mode(SelectionMode::Single)
+        .build();
+    let send_list_sw = ScrolledWindow::builder()
+        .min_content_height(100)
+        .build();
+    let send_list_frame = Frame::new(None);
+    send_list_sw.set_child(Some(&send_list));
+    send_list_frame.set_child(Some(&send_list_sw));
+    b.append(&send_list_frame);
+    btrfs_populate_send_list(&send_list, &send_dest_default);
+
+    // Receive instructions
+    b.append(&field_label("Restore instructions (select an archive above):"));
+    let recv_tv = TextView::builder()
+        .monospace(true)
+        .editable(false)
+        .wrap_mode(WrapMode::Word)
+        .build();
+    recv_tv
+        .buffer()
+        .set_text("Select an archive from the list above.");
+    let recv_sw = ScrolledWindow::builder()
+        .vexpand(false)
+        .min_content_height(100)
+        .build();
+    recv_sw.set_child(Some(&recv_tv));
+    let recv_frame = Frame::new(None);
+    recv_frame.set_child(Some(&recv_sw));
+    b.append(&recv_frame);
+
+    // Wire refresh combos button
+    {
+        let snap_combo = snap_combo.clone();
+        let parent_combo = parent_combo.clone();
+        let snap_entry = snap_entry.clone();
+        let source_base = source_base.clone();
+        refresh_send_btn.connect_clicked(move |_| {
+            btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), &source_base);
+        });
+    }
+
+    // Wire send_list selection → receive instructions
+    {
+        let recv_tv = recv_tv.clone();
+        let send_dest_entry = send_dest_entry.clone();
+        send_list.connect_row_selected(glib::clone!(
+            #[weak]
+            recv_tv,
+            move |_, row| {
+                if let Some(row) = row {
+                    let name = row.widget_name().to_string();
+                    let dest = send_dest_entry.text().to_string();
+                    recv_tv
+                        .buffer()
+                        .set_text(&btrfs_receive_instructions(&name, &dest));
+                }
+            }
+        ));
+    }
+
+    // Wire Send button
+    {
+        let snap_combo = snap_combo.clone();
+        let parent_combo = parent_combo.clone();
+        let send_dest_entry = send_dest_entry.clone();
+        let send_list = send_list.clone();
+        let send_lbl = send_lbl.clone();
+        let snap_dir_str = snap_entry.text().to_string();
+        send_btn.connect_clicked(glib::clone!(
+            #[weak]
+            send_list,
+            move |btn| {
+                let snap_name = match snap_combo.active_text() {
+                    Some(s) if !s.starts_with("—") => s.to_string(),
+                    _ => {
+                        send_lbl.set_text("❌  Select a snapshot first.");
+                        return;
+                    }
+                };
+                let parent_name = parent_combo
+                    .active_text()
+                    .filter(|s| !s.starts_with("—"))
+                    .map(|s| s.to_string());
+                let snap_path = format!("{}/{}", snap_dir_str, snap_name);
+                let parent_path =
+                    parent_name.map(|p| format!("{}/{}", snap_dir_str, p));
+                let dest_dir = send_dest_entry.text().to_string();
+                let dest_file = format!("{}/{}.btrfs.gz", dest_dir, snap_name);
+
+                btn.set_sensitive(false);
+                send_lbl.set_text("⏳  Sending — this may take a while…");
+
+                let result: std::sync::Arc<
+                    std::sync::Mutex<Option<anyhow::Result<String>>>,
+                > = std::sync::Arc::new(std::sync::Mutex::new(None));
+                let rt = std::sync::Arc::clone(&result);
+                std::thread::spawn(move || {
+                    *rt.lock().unwrap() = Some(btrfs_do_send(
+                        &snap_path,
+                        parent_path.as_deref(),
+                        &dest_file,
+                    ));
+                });
+
+                // Clone GTK objects for the timer closure.
+                // glib::clone! cannot be nested inside another glib::clone! closure
+                // for timeout_add_local, so we clone manually.
+                let send_lbl_t = send_lbl.clone();
+                let btn_t = btn.clone();
+                let send_list_t = send_list.clone();
+                let dest_dir_t = dest_dir.clone();
+                glib::timeout_add_local(
+                    std::time::Duration::from_millis(500),
+                    move || {
+                        let mut guard = result.lock().unwrap();
+                        if let Some(res) = guard.take() {
+                            match res {
+                                Ok(msg) => {
+                                    send_lbl_t.set_text(&msg);
+                                    btrfs_populate_send_list(&send_list_t, &dest_dir_t);
+                                }
+                                Err(e) => send_lbl_t.set_text(&format!("❌  {e}")),
+                            }
+                            btn_t.set_sensitive(true);
+                            return glib::ControlFlow::Break;
+                        }
+                        glib::ControlFlow::Continue
+                    },
+                );
             }
         ));
     }
@@ -1208,6 +1421,231 @@ fn btrfs_instructions(snap_name: &str, snap_dir: &str) -> String {
         dir = snap_dir,
         device = device,
     )
+}
+
+/// Populate the snapshot and parent ComboBoxText widgets from the snapshot directory.
+fn btrfs_populate_combos(
+    snap_combo: &ComboBoxText,
+    parent_combo: &ComboBoxText,
+    snap_dir: &str,
+    prefix: &str,
+) {
+    // Clear and reset
+    snap_combo.remove_all();
+    snap_combo.append_text("— select snapshot —");
+    parent_combo.remove_all();
+    parent_combo.append_text("— full send (no parent) —");
+
+    let dir = std::path::Path::new(snap_dir);
+    if !dir.exists() {
+        snap_combo.set_active(Some(0));
+        parent_combo.set_active(Some(0));
+        return;
+    }
+
+    let mut entries: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            e.path().is_dir() && (prefix.is_empty() || name.starts_with(prefix))
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort_by(|a, b| b.cmp(a)); // newest first
+
+    for name in &entries {
+        snap_combo.append_text(name);
+        parent_combo.append_text(name);
+    }
+    snap_combo.set_active(Some(0));
+    parent_combo.set_active(Some(0));
+}
+
+/// Populate a `ListBox` with `.btrfs.gz` archive files found in `send_dir`.
+fn btrfs_populate_send_list(list_box: &ListBox, send_dir: &str) {
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+
+    let dir = std::path::Path::new(send_dir);
+    if !dir.exists() {
+        let row = ListBoxRow::new();
+        row.set_child(Some(
+            &Label::builder()
+                .label("(no archives yet)")
+                .halign(Align::Start)
+                .css_classes(vec!["dim-label"])
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+        return;
+    }
+
+    let mut entries: Vec<(String, u64)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with(".btrfs.gz")
+        })
+        .map(|e| {
+            let sz = e.metadata().map(|m| m.len()).unwrap_or(0);
+            (e.file_name().to_string_lossy().into_owned(), sz)
+        })
+        .collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+
+    if entries.is_empty() {
+        let row = ListBoxRow::new();
+        row.set_child(Some(
+            &Label::builder()
+                .label("(no archives yet)")
+                .halign(Align::Start)
+                .css_classes(vec!["dim-label"])
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+        return;
+    }
+
+    for (name, sz) in entries {
+        let mb = sz / (1024 * 1024);
+        let row = ListBoxRow::new();
+        row.set_widget_name(&name);
+        row.set_child(Some(
+            &Label::builder()
+                .label(format!("{name}  ({mb} MB)"))
+                .halign(Align::Start)
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+    }
+}
+
+/// Generate restore instructions for a `.btrfs.gz` archive.
+fn btrfs_receive_instructions(archive_name: &str, send_dir: &str) -> String {
+    let file_path = format!("{}/{}", send_dir, archive_name);
+    format!(
+        "Archive : {archive_name}\n\
+         Location: {file_path}\n\
+         \n\
+         ── Restore to a BTRFS filesystem ────────────────────\n\
+         1. Mount a target BTRFS filesystem:\n\
+            sudo mount /dev/<device> /mnt/btrfs-restore\n\
+         \n\
+         2. Receive the snapshot:\n\
+            gunzip -c {file_path} | sudo btrfs receive /mnt/btrfs-restore/\n\
+         \n\
+         3. The restored snapshot appears as:\n\
+            /mnt/btrfs-restore/{snap_name}\n\
+         \n\
+         4. To make it the live home directory:\n\
+            sudo btrfs subvolume delete /home/$USER\n\
+            sudo btrfs subvolume snapshot \\\n\
+              /mnt/btrfs-restore/{snap_name} /home/$USER\n\
+         \n\
+         ── Manual terminal command ────────────────────────────\n\
+         If the GUI send fails with a permission error, run:\n\
+           btrfs send {snap_name_path} | gzip -c > {file_path}\n\
+         (prefix with 'sudo' if needed)\n",
+        archive_name = archive_name,
+        file_path = file_path,
+        snap_name = archive_name.trim_end_matches(".btrfs.gz"),
+        snap_name_path = format!(
+            "<snapshot_dir>/{}",
+            archive_name.trim_end_matches(".btrfs.gz")
+        ),
+    )
+}
+
+/// Run `btrfs send [--parent <parent>] <snap> | gzip -c > <dest_file>`.
+/// Safe to call from a background thread.
+fn btrfs_do_send(
+    snap_path: &str,
+    parent_path: Option<&str>,
+    dest_file: &str,
+) -> anyhow::Result<String> {
+    use anyhow::Context;
+    use std::process::{Command, Stdio};
+
+    // Ensure destination directory exists.
+    if let Some(dir) = std::path::Path::new(dest_file).parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating send dest dir {}", dir.display()))?;
+    }
+
+    // Build `btrfs send` child.
+    let mut send_cmd = Command::new("btrfs");
+    send_cmd.arg("send");
+    if let Some(p) = parent_path {
+        send_cmd.args(["--parent", p]);
+    }
+    send_cmd.arg(snap_path);
+    send_cmd.stdout(Stdio::piped());
+    send_cmd.stderr(Stdio::piped());
+
+    let mut send_child = send_cmd
+        .spawn()
+        .context("'btrfs' not found — install with: sudo dnf install btrfs-progs")?;
+    let send_stdout = send_child.stdout.take().expect("btrfs send stdout");
+
+    // Pipe through `gzip -c` into the destination file.
+    let dest_out = std::fs::File::create(dest_file)
+        .with_context(|| format!("creating {dest_file}"))?;
+    let mut gzip_child = Command::new("gzip")
+        .args(["-c", "-"])
+        .stdin(Stdio::from(send_stdout))
+        .stdout(Stdio::from(dest_out))
+        .spawn()
+        .context("spawning gzip")?;
+
+    let send_status = send_child.wait().context("waiting for btrfs send")?;
+    let gzip_status = gzip_child.wait().context("waiting for gzip")?;
+
+    if !send_status.success() {
+        // Read stderr for a useful message.
+        let stderr = send_child
+            .stderr
+            .take()
+            .map(|mut r| {
+                use std::io::Read;
+                let mut s = String::new();
+                let _ = r.read_to_string(&mut s);
+                s
+            })
+            .unwrap_or_default();
+        let hint = if stderr.to_lowercase().contains("permission") {
+            format!("\nRun manually: btrfs send {snap_path} | gzip -c > {dest_file}")
+        } else {
+            String::new()
+        };
+        anyhow::bail!("btrfs send failed: {}{hint}", stderr.trim());
+    }
+    if !gzip_status.success() {
+        anyhow::bail!("gzip failed");
+    }
+
+    let sz = std::fs::metadata(dest_file)
+        .map(|m| m.len() / (1024 * 1024))
+        .unwrap_or(0);
+    let name = std::path::Path::new(dest_file)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    Ok(format!("\u{2705}  Sent: {name} ({sz} MB)"))
 }
 
 // ── About tab ──────────────────────────────────────────────────────────────────
