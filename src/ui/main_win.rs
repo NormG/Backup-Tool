@@ -1051,9 +1051,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         refresh_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
-            move |_| {
-                btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref)
-            }
+            move |_| { btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref) }
         ));
     }
 
@@ -1141,12 +1139,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     b.append(&selrow);
 
     // Populate combos from existing snapshots
-    btrfs_populate_combos(
-        &snap_combo,
-        &parent_combo,
-        &snap_entry.text(),
-        &source_base,
-    );
+    btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), &source_base);
 
     // Send button
     let send_row = GBox::new(Orientation::Horizontal, 8);
@@ -1168,9 +1161,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     let send_list = ListBox::builder()
         .selection_mode(SelectionMode::Single)
         .build();
-    let send_list_sw = ScrolledWindow::builder()
-        .min_content_height(100)
-        .build();
+    let send_list_sw = ScrolledWindow::builder().min_content_height(100).build();
     let send_list_frame = Frame::new(None);
     send_list_sw.set_child(Some(&send_list));
     send_list_frame.set_child(Some(&send_list_sw));
@@ -1178,7 +1169,9 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     btrfs_populate_send_list(&send_list, &send_dest_default);
 
     // Receive instructions
-    b.append(&field_label("Restore instructions (select an archive above):"));
+    b.append(&field_label(
+        "Restore instructions (select an archive above):",
+    ));
     let recv_tv = TextView::builder()
         .monospace(true)
         .editable(false)
@@ -1250,17 +1243,15 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     .filter(|s| !s.starts_with("—"))
                     .map(|s| s.to_string());
                 let snap_path = format!("{}/{}", snap_dir_str, snap_name);
-                let parent_path =
-                    parent_name.map(|p| format!("{}/{}", snap_dir_str, p));
+                let parent_path = parent_name.map(|p| format!("{}/{}", snap_dir_str, p));
                 let dest_dir = send_dest_entry.text().to_string();
                 let dest_file = format!("{}/{}.btrfs.gz", dest_dir, snap_name);
 
                 btn.set_sensitive(false);
                 send_lbl.set_text("⏳  Sending — this may take a while…");
 
-                let result: std::sync::Arc<
-                    std::sync::Mutex<Option<anyhow::Result<String>>>,
-                > = std::sync::Arc::new(std::sync::Mutex::new(None));
+                let result: std::sync::Arc<std::sync::Mutex<Option<anyhow::Result<String>>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(None));
                 let rt = std::sync::Arc::clone(&result);
                 std::thread::spawn(move || {
                     *rt.lock().unwrap() = Some(btrfs_do_send(
@@ -1277,24 +1268,21 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 let btn_t = btn.clone();
                 let send_list_t = send_list.clone();
                 let dest_dir_t = dest_dir.clone();
-                glib::timeout_add_local(
-                    std::time::Duration::from_millis(500),
-                    move || {
-                        let mut guard = result.lock().unwrap();
-                        if let Some(res) = guard.take() {
-                            match res {
-                                Ok(msg) => {
-                                    send_lbl_t.set_text(&msg);
-                                    btrfs_populate_send_list(&send_list_t, &dest_dir_t);
-                                }
-                                Err(e) => send_lbl_t.set_text(&format!("❌  {e}")),
+                glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+                    let mut guard = result.lock().unwrap();
+                    if let Some(res) = guard.take() {
+                        match res {
+                            Ok(msg) => {
+                                send_lbl_t.set_text(&msg);
+                                btrfs_populate_send_list(&send_list_t, &dest_dir_t);
                             }
-                            btn_t.set_sensitive(true);
-                            return glib::ControlFlow::Break;
+                            Err(e) => send_lbl_t.set_text(&format!("❌  {e}")),
                         }
-                        glib::ControlFlow::Continue
-                    },
-                );
+                        btn_t.set_sensitive(true);
+                        return glib::ControlFlow::Break;
+                    }
+                    glib::ControlFlow::Continue
+                });
             }
         ));
     }
@@ -1490,11 +1478,7 @@ fn btrfs_populate_send_list(list_box: &ListBox, send_dir: &str) {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".btrfs.gz")
-        })
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".btrfs.gz"))
         .map(|e| {
             let sz = e.metadata().map(|m| m.len()).unwrap_or(0);
             (e.file_name().to_string_lossy().into_owned(), sz)
@@ -1538,6 +1522,8 @@ fn btrfs_populate_send_list(list_box: &ListBox, send_dir: &str) {
 /// Generate restore instructions for a `.btrfs.gz` archive.
 fn btrfs_receive_instructions(archive_name: &str, send_dir: &str) -> String {
     let file_path = format!("{}/{}", send_dir, archive_name);
+    let snap_name = archive_name.trim_end_matches(".btrfs.gz");
+    let snap_name_path = format!("<snapshot_dir>/{snap_name}");
     format!(
         "Archive : {archive_name}\n\
          Location: {file_path}\n\
@@ -1561,13 +1547,6 @@ fn btrfs_receive_instructions(archive_name: &str, send_dir: &str) -> String {
          If the GUI send fails with a permission error, run:\n\
            btrfs send {snap_name_path} | gzip -c > {file_path}\n\
          (prefix with 'sudo' if needed)\n",
-        archive_name = archive_name,
-        file_path = file_path,
-        snap_name = archive_name.trim_end_matches(".btrfs.gz"),
-        snap_name_path = format!(
-            "<snapshot_dir>/{}",
-            archive_name.trim_end_matches(".btrfs.gz")
-        ),
     )
 }
 
@@ -1603,8 +1582,8 @@ fn btrfs_do_send(
     let send_stdout = send_child.stdout.take().expect("btrfs send stdout");
 
     // Pipe through `gzip -c` into the destination file.
-    let dest_out = std::fs::File::create(dest_file)
-        .with_context(|| format!("creating {dest_file}"))?;
+    let dest_out =
+        std::fs::File::create(dest_file).with_context(|| format!("creating {dest_file}"))?;
     let mut gzip_child = Command::new("gzip")
         .args(["-c", "-"])
         .stdin(Stdio::from(send_stdout))
