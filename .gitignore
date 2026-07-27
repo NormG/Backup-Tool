@@ -1,0 +1,18 @@
+# Rust build artefacts
+/target/
+
+# Editor temporaries
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.orig
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime artefacts (never commit real user config or logs)
+*.log
+/tmp/

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Drive body -->
+  <rect x="6" y="18" width="52" height="30" rx="5" ry="5"
+        fill="#1565C0" stroke="#0D47A1" stroke-width="1.5"/>
+  <!-- Drive shelf (bottom third) -->
+  <rect x="6" y="36" width="52" height="12" rx="0" ry="0"
+        fill="#0D47A1"/>
+  <rect x="6" y="43" width="52" height="5" rx="0" ry="5"
+        fill="#0D47A1"/>
+  <!-- Activity LED -->
+  <circle cx="50" cy="40" r="3" fill="#4FC3F7"/>
+  <!-- Platter circles -->
+  <circle cx="26" cy="27" r="7" fill="#1976D2" stroke="#42A5F5" stroke-width="1"/>
+  <circle cx="26" cy="27" r="2.5" fill="#42A5F5"/>
+  <!-- Upload arrow (house backup symbol) -->
+  <g transform="translate(40,14)">
+    <!-- Arrow shaft -->
+    <rect x="-2.5" y="2" width="5" height="9" fill="white"/>
+    <!-- Arrow head -->
+    <polygon points="0,-2 -7,6 7,6" fill="white"/>
+  </g>
+  <!-- House outline (small, inside arrow group area) -->
+</svg>

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Home Backup
+GenericName=Backup Manager
+Comment=Manage home-directory rsync backups to an external drive
+Exec=@EXEC@
+Icon=home-backup
+Terminal=false
+Categories=System;Utility;Archiving;
+Keywords=backup;rsync;snapshot;restore;incremental;
+StartupNotify=true
+X-GNOME-UsesNotifications=true

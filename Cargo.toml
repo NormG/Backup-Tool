@@ -1,0 +1,26 @@
+[package]
+name = "home-backup"
+version = "0.1.0"
+edition = "2021"
+authors = ["norm"]
+description = "GTK4 home-directory backup manager using rsync and systemd"
+license = "GPL-3.0"
+repository = ""
+
+[[bin]]
+name = "home-backup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow     = "1.0.102"
+chrono     = { version = "0.4.45", features = ["serde"] }
+dirs       = "6"
+glib       = "0.21"
+gtk4       = { version = "0.10", features = ["v4_14"] }
+serde      = { version = "1",  features = ["derive"] }
+serde_json = "1"
+toml       = "1"
+
+[profile.release]
+opt-level = 3
+strip = true
