@@ -95,6 +95,10 @@ install -Dm 0644 README.md \
 %post
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
+# Create Btrfs snapshot directory, world-writable with sticky bit (like /tmp)
+# so any user can create their own snapshots without needing root.
+mkdir -p /home/.snapshots 2>/dev/null || :
+chmod 1777 /home/.snapshots 2>/dev/null || :
 
 %postun
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :

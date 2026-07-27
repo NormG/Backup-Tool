@@ -1050,10 +1050,33 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     create_lbl.set_text(&format!("❌  Could not create snapshot dir: {e}"));
                     return;
                 }
-                match std::process::Command::new("btrfs")
-                    .args(["subvolume", "snapshot", "-r", &actual_source, &snap_path])
-                    .output()
-                {
+
+                let snap_args = [
+                    "subvolume", "snapshot", "-r", &actual_source, &snap_path,
+                ];
+
+                // Try without elevation first; retry via pkexec on EPERM.
+                let output = std::process::Command::new("btrfs")
+                    .args(snap_args)
+                    .output();
+
+                let needs_elevation = matches!(&output,
+                    Ok(o) if !o.status.success() && {
+                        let e = String::from_utf8_lossy(&o.stderr).to_lowercase();
+                        e.contains("not permitted") || e.contains("permission")
+                    }
+                );
+
+                let output = if needs_elevation {
+                    // pkexec shows the standard polkit GUI authentication dialog.
+                    std::process::Command::new("pkexec")
+                        .args(["btrfs"].iter().chain(snap_args.iter()))
+                        .output()
+                } else {
+                    output
+                };
+
+                match output {
                     Ok(o) if o.status.success() => {
                         create_lbl
                             .set_text(&format!("✅  Snapshot created: {snap_name}{user_note}"));
@@ -1061,13 +1084,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     }
                     Ok(o) => {
                         let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                        create_lbl.set_text(&format!("❌  btrfs error: {err}"));
+                        create_lbl.set_text(&format!("❌  {err}"));
                     }
-                    Err(_) => {
-                        create_lbl.set_text(
-                            "❌  'btrfs' not found.  \
-                             Install with: sudo dnf install btrfs-progs",
-                        );
+                    Err(e) => {
+                        create_lbl.set_text(&format!(
+                            "❌  Command failed: {e}.  \
+                             Install btrfs-progs: sudo dnf install btrfs-progs"
+                        ));
                     }
                 }
             }
@@ -1097,20 +1120,32 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 if let Some(row) = list_box.selected_row() {
                     let name = row.widget_name().to_string();
                     let snap_path = format!("{}/{}", snap_entry.text(), name);
-                    match std::process::Command::new("btrfs")
+                    // Try without elevation; retry via pkexec on EPERM.
+                    let del_out = std::process::Command::new("btrfs")
                         .args(["subvolume", "delete", &snap_path])
-                        .output()
-                    {
+                        .output();
+                    let needs_elev = matches!(&del_out,
+                        Ok(o) if !o.status.success() && {
+                            let e = String::from_utf8_lossy(&o.stderr).to_lowercase();
+                            e.contains("not permitted") || e.contains("permission")
+                        }
+                    );
+                    let del_out = if needs_elev {
+                        std::process::Command::new("pkexec")
+                            .args(["btrfs", "subvolume", "delete", &snap_path])
+                            .output()
+                    } else {
+                        del_out
+                    };
+                    match del_out {
                         Ok(o) if o.status.success() => {
                             btrfs_populate_list(&list_box, &snap_entry.text(), "");
                             btn.set_sensitive(false);
                         }
-                        Ok(o) => {
-                            eprintln!(
-                                "btrfs delete failed: {}",
-                                String::from_utf8_lossy(&o.stderr)
-                            );
-                        }
+                        Ok(o) => eprintln!(
+                            "btrfs delete: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        ),
                         Err(e) => eprintln!("btrfs not found: {e}"),
                     }
                 }
