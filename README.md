@@ -45,14 +45,35 @@ hardlinked so they consume no extra disk space.
 
 ## Installation
 
+### Option A — RPM (recommended for Fedora)
+
 ```bash
-git clone <repo-url> home-backup2
-cd home-backup2
+git clone https://github.com/NormG/Backup-Tool
+cd Backup-Tool
+./package-rpm.sh                          # build the .rpm (~3 min first run)
+sudo dnf install ~/rpmbuild/RPMS/x86_64/home-backup-0.1.3-1.fc44.x86_64.rpm
+home-backup                               # launch wizard
+```
+
+The RPM installs the binary to `/usr/bin/home-backup`, the desktop
+launcher, icon, and assets.  The systemd timer and config are created
+by the first-run wizard, not by the RPM, so run the app to complete setup.
+
+To rebuild for a newer version without re-vendoring dependencies:
+```bash
+./package-rpm.sh --no-vendor
+```
+
+### Option B — User install (no root)
+
+```bash
+git clone https://github.com/NormG/Backup-Tool
+cd Backup-Tool
 ./install.sh
 ```
 
 The script:
-1. Checks all dependencies
+1. Checks all dependencies (`rsync`, `cargo`, `gtk4-devel`)
 2. Compiles a stripped release binary with `cargo build --release`
 3. Installs the binary to `~/.local/bin/home-backup`
 4. Installs the icon (128×128 PNG + SVG) to `~/.local/share/icons/hicolor/`
@@ -235,27 +256,64 @@ with a 1-hour stop timeout so large backups are not killed mid-run.
 
 **`home-backup.timer`** — fires daily at the configured time; `Persistent=true`
 so a missed backup (e.g. machine was off) runs immediately on the next boot.
+`RandomizedDelaySec=300` staggers the start by up to 5 minutes to avoid
+constant contention if multiple machines back up to the same drive.
 
-Check status at any time:
+Useful commands:
 
 ```bash
+# Status and scheduling
 systemctl --user status home-backup.timer
 systemctl --user list-timers home-backup.timer
 journalctl --user -u home-backup.service --since today
+
+# Manually trigger a backup
+systemctl --user start home-backup.service
+
+# Stop a running backup (e.g. to cancel a test run)
+systemctl --user stop home-backup.service
+systemctl --user reset-failed home-backup.service   # clear the failed state
+
+# Disable / re-enable the scheduled timer
+systemctl --user disable --now home-backup.timer
+systemctl --user enable  --now home-backup.timer
 ```
+
+> **Note:** If you stop a running backup manually, the `.inprogress-*`
+> staging directory will be left on the drive.  Remove it before the
+> next run to avoid confusion:
+> ```bash
+> rm -rf /path/to/dest/.inprogress-*
+> ```
 
 ---
 
 ## Uninstall
+
+### RPM install
+
+```bash
+sudo dnf remove home-backup
+```
+
+This removes the system binary, launcher, and icons.  The user-level
+systemd timer (`~/.config/systemd/user/home-backup.timer`) is **not**
+removed by `dnf` — it lives in your home directory and will continue to
+fire.  Disable it manually after removing the RPM:
+
+```bash
+systemctl --user disable --now home-backup.timer
+```
+
+### User install (`install.sh`)
 
 ```bash
 ./install.sh uninstall        # prompts for confirmation
 ./install.sh uninstall --yes  # no prompt
 ```
 
-This disables and removes the systemd timer and service, removes the binary,
-icon, launcher, and assets directory. **Your config file and backup snapshots
-are never deleted.**
+This disables the timer, removes the binary, launcher, icons, and assets.
+**Your config file and backup snapshots are never deleted.**
 
 To also remove the config:
 
