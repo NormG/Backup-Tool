@@ -12,7 +12,7 @@
 set -euo pipefail
 
 NAME="home-backup"
-VERSION="0.1.5"
+VERSION="0.1.6"
 RELEASE="1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
