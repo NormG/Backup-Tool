@@ -1005,7 +1005,6 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         let snap_entry = snap_entry.clone();
         let create_lbl = create_lbl.clone();
         let source = source.clone();
-        let source_base = source_base.clone();
         create_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
@@ -1026,8 +1025,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 // btrfs subvolume snapshot requires a subvolume as source.
                 // If source_dir is a plain directory (not a subvolume), walk
                 // up to the nearest subvolume ancestor (inode 256).
-                let actual_source =
-                    btrfs_find_subvol(&source).unwrap_or_else(|| source.clone());
+                let actual_source = btrfs_find_subvol(&source).unwrap_or_else(|| source.clone());
                 let actual_base = std::path::Path::new(&actual_source)
                     .file_name()
                     .unwrap_or_default()
@@ -1043,9 +1041,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                         .strip_prefix(&actual_source)
                         .unwrap_or(&source)
                         .trim_matches('/');
-                    format!(
-                        "  (your files are at {snap_name}/{rel}/)"
-                    )
+                    format!("  (your files are at {snap_name}/{rel}/)")
                 } else {
                     String::new()
                 };
@@ -1059,9 +1055,8 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     .output()
                 {
                     Ok(o) if o.status.success() => {
-                        create_lbl.set_text(&format!(
-                            "✅  Snapshot created: {snap_name}{user_note}"
-                        ));
+                        create_lbl
+                            .set_text(&format!("✅  Snapshot created: {snap_name}{user_note}"));
                         btrfs_populate_list(&list_box, &snap_dir, &actual_base);
                     }
                     Ok(o) => {
