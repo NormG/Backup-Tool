@@ -2,7 +2,7 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/home-backup-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           home-backup
-Version:        0.1.6
+Version:        0.1.7
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
