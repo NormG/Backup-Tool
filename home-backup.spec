@@ -1,5 +1,5 @@
 Name:           home-backup
-Version:        0.1.3
+Version:        0.1.4
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
@@ -109,6 +109,11 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sun Jul 27 2026 norm <norm@localhost> - 0.1.4-1
+- RPM packaging introduced; package-rpm.sh build script added
+- Fix: Source/Destination tab now shows live-detected drive label
+- Docs: finalized README with RPM install, systemd commands, uninstall
+
 * Sun Jul 27 2026 norm <norm@localhost> - 0.1.3-1
 - Initial RPM package
 - GTK4 home-directory backup manager with wizard and management window
