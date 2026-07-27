@@ -53,7 +53,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .vexpand(true)
         .build();
     btrfs_page.set_child(Some(&build_btrfs_tab(Rc::clone(&cfg))));
-    nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
+    nb.append_page(&btrfs_page, Some(&Label::new(Some("Btrfs"))));
 
     // About is always last (rightmost).
     let about_page = build_about();
@@ -803,7 +803,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(
         &Label::builder()
-            .label("BTRFS Snapshots")
+            .label("Btrfs Snapshots")
             .css_classes(vec!["title-2"])
             .halign(Align::Start)
             .build(),
@@ -829,8 +829,8 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         b.append(
             &Label::builder()
                 .label(
-                    "BTRFS snapshots are only available when the source \
-                     directory is on a BTRFS filesystem.",
+                    "Btrfs snapshots are only available when the source \
+                     directory is on a Btrfs filesystem.",
                 )
                 .halign(Align::Start)
                 .wrap(true)
@@ -848,7 +848,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         &Label::builder()
             .label(
                 "ℹ  Snapshots must be outside the source subvolume and on the \
-                 same BTRFS volume.  The default path /home/.snapshots is \
+                 same Btrfs volume.  The default path /home/.snapshots is \
                  root-owned — run this once to allow your user to write there:",
             )
             .halign(Align::Start)
@@ -889,7 +889,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    // Default to a sibling directory on the same BTRFS volume as the source.
+    // Default to a sibling directory on the same Btrfs volume as the source.
     // The user must run the one-time setup command above if /home/.snapshots
     // does not yet exist.
     let source_parent = std::path::Path::new(&source)
@@ -1012,29 +1012,57 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
             move |_| {
                 let snap_dir = snap_entry.text().to_string();
                 let stamp = chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string();
-                let snap_name = format!("{}-{}", source_base, stamp);
-                let snap_path = format!("{}/{}", snap_dir, snap_name);
 
-                // Validate that the chosen path is on BTRFS.
+                // Validate that the chosen path is on Btrfs.
                 if crate::drives::detect_fstype(&snap_dir).as_deref() != Some("btrfs") {
                     create_lbl.set_text(
-                        "❌  Snapshot path is not on a BTRFS filesystem.  \
-                         Choose a location on the same BTRFS volume as the source \
+                        "❌  Snapshot path is not on a Btrfs filesystem.  \
+                         Choose a location on the same Btrfs volume as the source \
                          (e.g. /home/.snapshots).",
                     );
                     return;
                 }
+
+                // btrfs subvolume snapshot requires a subvolume as source.
+                // If source_dir is a plain directory (not a subvolume), walk
+                // up to the nearest subvolume ancestor (inode 256).
+                let actual_source =
+                    btrfs_find_subvol(&source).unwrap_or_else(|| source.clone());
+                let actual_base = std::path::Path::new(&actual_source)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                // Re-derive snap_name and snap_path using the actual subvolume base.
+                let snap_name = format!("{}-{}", actual_base, stamp);
+                let snap_path = format!("{}/{}", snap_dir, snap_name);
+
+                // Note where the user's files will be if we're snapshotting a parent.
+                let user_note = if actual_source != source {
+                    let rel = source
+                        .strip_prefix(&actual_source)
+                        .unwrap_or(&source)
+                        .trim_matches('/');
+                    format!(
+                        "  (your files are at {snap_name}/{rel}/)"
+                    )
+                } else {
+                    String::new()
+                };
+
                 if let Err(e) = std::fs::create_dir_all(&snap_dir) {
                     create_lbl.set_text(&format!("❌  Could not create snapshot dir: {e}"));
                     return;
                 }
                 match std::process::Command::new("btrfs")
-                    .args(["subvolume", "snapshot", "-r", &source, &snap_path])
+                    .args(["subvolume", "snapshot", "-r", &actual_source, &snap_path])
                     .output()
                 {
                     Ok(o) if o.status.success() => {
-                        create_lbl.set_text(&format!("✅  Snapshot created: {}", snap_name));
-                        btrfs_populate_list(&list_box, &snap_dir, &source_base);
+                        create_lbl.set_text(&format!(
+                            "✅  Snapshot created: {snap_name}{user_note}"
+                        ));
+                        btrfs_populate_list(&list_box, &snap_dir, &actual_base);
                     }
                     Ok(o) => {
                         let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -1109,7 +1137,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     b.append(
         &Label::builder()
             .label(
-                "Serialise a local BTRFS snapshot to a compressed .btrfs.gz file on any \
+                "Serialise a local Btrfs snapshot to a compressed .btrfs.gz file on any \
                  filesystem (ext4, xfs, …). Restore with 'gunzip | btrfs receive'.",
             )
             .halign(Align::Start)
@@ -1332,6 +1360,21 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     b
 }
 
+/// Walk up from `path` until a Btrfs subvolume root is found (inode 256).
+/// Returns the subvolume path or `None` if nothing was found.
+fn btrfs_find_subvol(path: &str) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut cur = std::path::Path::new(path);
+    loop {
+        if let Ok(m) = std::fs::metadata(cur) {
+            if m.ino() == 256 {
+                return Some(cur.to_string_lossy().into_owned());
+            }
+        }
+        cur = cur.parent()?;
+    }
+}
+
 /// Populate a `ListBox` with snapshot subdirectories found in `snap_dir`
 /// whose names start with `prefix` (may be empty to show all).
 fn btrfs_populate_list(list_box: &ListBox, snap_dir: &str, prefix: &str) {
@@ -1425,7 +1468,7 @@ fn btrfs_instructions(snap_name: &str, snap_dir: &str) -> String {
          Device   : {device}\n\
          \n\
          ── Access individual files ───────────────────────────\n\
-         1. Mount the BTRFS volume:\n\
+         1. Mount the Btrfs volume:\n\
             sudo mount -o subvol=.btrfs-snapshots/{name} {device} /mnt/recovery\n\
          \n\
          2. Browse and copy files:\n\
@@ -1439,7 +1482,7 @@ fn btrfs_instructions(snap_name: &str, snap_dir: &str) -> String {
          ⚠  WARNING: this replaces your entire home directory.\n\
          \n\
          1. Boot from a live USB or log in as a different user.\n\
-         2. Mount the BTRFS root volume:\n\
+         2. Mount the Btrfs root volume:\n\
             sudo mount {device} /mnt/btrfs\n\
          3. Delete the current home subvolume:\n\
             sudo btrfs subvolume delete /home/$USER\n\
@@ -1570,8 +1613,8 @@ fn btrfs_receive_instructions(archive_name: &str, send_dir: &str) -> String {
         "Archive : {archive_name}\n\
          Location: {file_path}\n\
          \n\
-         ── Restore to a BTRFS filesystem ────────────────────\n\
-         1. Mount a target BTRFS filesystem:\n\
+         ── Restore to a Btrfs filesystem ────────────────────\n\
+         1. Mount a target Btrfs filesystem:\n\
             sudo mount /dev/<device> /mnt/btrfs-restore\n\
          \n\
          2. Receive the snapshot:\n\
