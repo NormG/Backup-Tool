@@ -1,3 +1,6 @@
+# TODO: Add GPG signing key once a key pair is generated.
+#   rpm --addsign ~/rpmbuild/RPMS/x86_64/home-backup-*.rpm
+#   Distribute the public key alongside the .rpm for user verification.
 Name:           home-backup
 Version:        0.1.4
 Release:        1%{?dist}
