@@ -836,13 +836,38 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(&gtk4::Separator::new(Orientation::Horizontal));
 
-    // Phase 2 note
+    // ── Requirement notes ───────────────────────────────────────
     b.append(
         &Label::builder()
             .label(
-                "ℹ  BTRFS snapshots must reside on the same BTRFS volume as the source.  \
-                 To back up to an external ext4 drive, use 'btrfs send / btrfs receive' \
-                 (Phase 2 — not yet implemented in this GUI).",
+                "ℹ  Snapshots must be outside the source subvolume and on the \
+                 same BTRFS volume.  The default path /home/.snapshots is \
+                 root-owned — run this once to allow your user to write there:",
+            )
+            .halign(Align::Start)
+            .wrap(true)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+
+    // Copyable one-time setup command
+    let user = std::env::var("USER").unwrap_or_else(|_| "$USER".to_string());
+    let setup_cmd = format!(
+        "sudo mkdir -p /home/.snapshots && sudo chown {user}:{user} /home/.snapshots"
+    );
+    b.append(
+        &gtk4::Entry::builder()
+            .text(&setup_cmd)
+            .editable(false)
+            .margin_bottom(4)
+            .build(),
+    );
+
+    b.append(
+        &Label::builder()
+            .label(
+                "ℹ  To export snapshots to an ext4 drive, use \
+                 'btrfs send / btrfs receive' (Phase 2 — not yet in this GUI).",
             )
             .halign(Align::Start)
             .wrap(true)
@@ -857,8 +882,9 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    // Default to a sibling directory on the same BTRFS volume as the source,
-    // NOT on the external backup drive which may be ext4.
+    // Default to a sibling directory on the same BTRFS volume as the source.
+    // The user must run the one-time setup command above if /home/.snapshots
+    // does not yet exist.
     let source_parent = std::path::Path::new(&source)
         .parent()
         .unwrap_or(std::path::Path::new("/"))
