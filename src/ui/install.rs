@@ -147,11 +147,18 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
         #[strong]
         pages,
         move |_| {
-            let mut idx = current_page.borrow_mut();
-            if *idx > 0 {
+            // Compute the previous page name and drop the borrow BEFORE
+            // calling set_visible_child_name; that call fires
+            // connect_visible_child_notify synchronously, and any handler
+            // that tries to borrow current_page would panic if we still
+            // held the guard here.
+            let prev = {
+                let mut idx = current_page.borrow_mut();
+                if *idx == 0 { return; }
                 *idx -= 1;
-                stack.set_visible_child_name(pages[*idx]);
-            }
+                pages[*idx]
+            };
+            stack.set_visible_child_name(prev);
         }
     ));
 
@@ -259,37 +266,24 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
                 _ => {}
             }
 
-            // Advance page.
-            let mut i = current_page.borrow_mut();
-            *i += 1;
-            let next_name = pages[*i];
+            // Advance page.  Drop the borrow before set_visible_child_name
+            // to avoid a re-entrant RefCell panic in the notify signal handler.
+            let next_name = {
+                let mut i = current_page.borrow_mut();
+                *i += 1;
+                pages[*i]
+            };
             stack.set_visible_child_name(next_name);
 
-            // Populate review text.
             if next_name == "review" {
                 review_lbl.set_text(&build_review_text(&cfg.borrow()));
             }
-
-            drop(i);
         }
     ));
 
-    // Update nav buttons when page changes.
-    stack.connect_visible_child_notify(glib::clone!(
-        #[strong]
-        current_page,
-        #[strong]
-        pages,
-        move |s| {
-            if let Some(name) = s.visible_child_name() {
-                if let Some(idx) = pages.iter().position(|&p| p == name.as_str()) {
-                    *current_page.borrow_mut() = idx;
-                }
-            }
-        }
-    ));
-
-    // Reconnect update_nav to the page change signal.
+    // Update nav buttons when the visible page changes.
+    // NOTE: current_page is already updated by the click handlers before
+    // set_visible_child_name is called, so we can read it safely here.
     stack.connect_visible_child_notify(glib::clone!(
         #[strong]
         btn_back,
@@ -640,7 +634,7 @@ fn build_review_text(cfg: &Config) -> String {
          • ~/.config/systemd/user/home-backup.service\n\
          • ~/.config/systemd/user/home-backup.timer  (OnCalendar=*-*-* {})\n\
          • ~/.local/share/applications/home-backup.desktop\n\
-         • ~/.local/share/icons/hicolor/64x64/apps/home-backup.png\n\
+         • ~/.local/share/icons/hicolor/128x128/apps/home-backup.png\n\
          • ~/.config/home-backup/config.toml",
         cfg.source_dir,
         cfg.dest_dir,
@@ -708,8 +702,11 @@ fn do_install(
 
     done_lbl.set_text(&recap);
 
-    let mut i = current_page.borrow_mut();
-    *i = 6;
+    // Drop borrow before set_visible_child_name fires the notify signal.
+    {
+        let mut i = current_page.borrow_mut();
+        *i = 6;
+    }
     stack.set_visible_child_name(pages[6]);
 }
 
