@@ -126,7 +126,7 @@ window opens.
 
 ## Main Window
 
-The manager has six tabs:
+The manager has seven tabs:
 
 ### Dashboard
 - Current config summary with live drive-label detection
@@ -161,6 +161,19 @@ The manager has six tabs:
 - License, GitHub repository URL
 - Backup engine, scheduler, config and log paths
 - Copyright
+
+### BTRFS
+Only active when the source directory is on a BTRFS filesystem; otherwise
+displays a notice and is otherwise inert.
+- Snapshot storage path (default: `<dest_dir>/.btrfs-snapshots/`)
+- **Create Snapshot** — creates a read-only `btrfs subvolume snapshot -r`
+- List of existing snapshots, newest first; **Refresh** rescans
+- **Recovery instructions** panel — populated when a snapshot is selected;
+  shows exact `mount`, file-copy, and full-restore commands with the resolved
+  device path filled in
+- **Delete Selected Snapshot** — calls `btrfs subvolume delete`
+
+Requires `btrfs-progs`: `sudo dnf install btrfs-progs`
 
 ---
 

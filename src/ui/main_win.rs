@@ -7,8 +7,8 @@ use std::{
 use crate::{backup, config::Config, systemd};
 use gtk4::{
     glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, FileChooserAction,
-    FileChooserDialog, Frame, Label, Notebook, Orientation, ResponseType, ScrolledWindow,
-    SpinButton, Switch, TextView, WrapMode,
+    FileChooserDialog, Frame, Label, ListBox, ListBoxRow, Notebook, Orientation, ResponseType,
+    ScrolledWindow, SelectionMode, SpinButton, Switch, TextView, WrapMode,
 };
 
 // ── Entry-point ───────────────────────────────────────────────────────────────
@@ -46,6 +46,11 @@ pub fn show(app: &gtk4::Application, config: Config) {
 
     let about_page = build_about();
     nb.append_page(&about_page, Some(&Label::new(Some("About"))));
+
+    // ── Tab 7 — BTRFS Snapshots ───────────────────────────────────────────────
+    let btrfs_page = build_btrfs_tab(Rc::clone(&cfg));
+    nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
+    nb.set_tab_reorderable(&btrfs_page, false);
 
     // Refresh the dashboard status label whenever the dashboard tab is shown.
     nb.connect_switch_page(glib::clone!(
@@ -783,6 +788,381 @@ fn load_log(tv: &TextView) {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+// ── BTRFS Snapshot tab ───────────────────────────────────────────────────────────
+
+fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
+    let b = tab_box();
+
+    b.append(
+        &Label::builder()
+            .label("BTRFS Snapshots")
+            .css_classes(vec!["title-2"])
+            .halign(Align::Start)
+            .build(),
+    );
+
+    // Detect filesystem type of source directory.
+    let source = cfg.borrow().source_dir.clone();
+    let fstype = crate::drives::detect_fstype(&source);
+    let is_btrfs = fstype.as_deref() == Some("btrfs");
+
+    b.append(
+        &Label::builder()
+            .label(&format!(
+                "Source filesystem: {}",
+                fstype.as_deref().unwrap_or("unknown")
+            ))
+            .halign(Align::Start)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+
+    if !is_btrfs {
+        b.append(
+            &Label::builder()
+                .label(
+                    "BTRFS snapshots are only available when the source \
+                     directory is on a BTRFS filesystem.",
+                )
+                .halign(Align::Start)
+                .wrap(true)
+                .css_classes(vec!["dim-label"])
+                .margin_top(12)
+                .build(),
+        );
+        return b;
+    }
+
+    b.append(&gtk4::Separator::new(Orientation::Horizontal));
+
+    // ── Snapshot storage path ───────────────────────────────────────
+    let dest = cfg.borrow().dest_dir.clone();
+    let source_base = std::path::Path::new(&source)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let default_snap_dir = format!("{}/.btrfs-snapshots", dest);
+
+    b.append(&field_label("Snapshot storage path:"));
+    let snap_row = GBox::new(Orientation::Horizontal, 8);
+    let snap_entry = gtk4::Entry::builder()
+        .text(&default_snap_dir)
+        .hexpand(true)
+        .build();
+    snap_row.append(&snap_entry);
+    b.append(&snap_row);
+
+    // ── Create button ─────────────────────────────────────────────────
+    let create_row = GBox::new(Orientation::Horizontal, 8);
+    let create_btn = Button::builder()
+        .label("Create Snapshot")
+        .css_classes(vec!["suggested-action"])
+        .build();
+    let create_lbl = Label::builder()
+        .halign(Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .build();
+    create_row.append(&create_btn);
+    create_row.append(&create_lbl);
+    b.append(&create_row);
+
+    // ── Snapshot list ───────────────────────────────────────────────────
+    let list_header = GBox::new(Orientation::Horizontal, 8);
+    list_header.append(&field_label("Existing snapshots:"));
+    let spacer = Label::builder().hexpand(true).build();
+    list_header.append(&spacer);
+    let refresh_btn = Button::with_label("↺ Refresh");
+    list_header.append(&refresh_btn);
+    b.append(&list_header);
+
+    let list_box = ListBox::builder()
+        .selection_mode(SelectionMode::Single)
+        .build();
+    let list_sw = ScrolledWindow::builder()
+        .min_content_height(130)
+        .build();
+    let list_frame = Frame::new(None);
+    list_sw.set_child(Some(&list_box));
+    list_frame.set_child(Some(&list_sw));
+    b.append(&list_frame);
+
+    // ── Recovery instructions ──────────────────────────────────────────
+    b.append(&field_label("Recovery instructions (select a snapshot above):"));
+    let instr_tv = TextView::builder()
+        .monospace(true)
+        .editable(false)
+        .wrap_mode(WrapMode::Word)
+        .build();
+    instr_tv.buffer().set_text(
+        "Select a snapshot from the list above to see recovery instructions.",
+    );
+    let instr_sw = ScrolledWindow::builder()
+        .vexpand(true)
+        .min_content_height(160)
+        .build();
+    instr_sw.set_child(Some(&instr_tv));
+    let instr_frame = Frame::new(None);
+    instr_frame.set_child(Some(&instr_sw));
+    b.append(&instr_frame);
+
+    // ── Delete button ─────────────────────────────────────────────────
+    let del_btn = Button::builder()
+        .label("Delete Selected Snapshot")
+        .css_classes(vec!["destructive-action"])
+        .halign(Align::End)
+        .sensitive(false)
+        .build();
+    b.append(&del_btn);
+
+    // ── Populate and wire ────────────────────────────────────────────────
+    btrfs_populate_list(&list_box, &snap_entry.text(), &source_base);
+
+    // List selection → update instructions + enable delete
+    {
+        let instr_tv = instr_tv.clone();
+        let del_btn = del_btn.clone();
+        let snap_entry = snap_entry.clone();
+        list_box.connect_row_selected(glib::clone!(
+            #[weak]
+            instr_tv,
+            #[weak]
+            del_btn,
+            move |_, row| {
+                if let Some(row) = row {
+                    let name = row.widget_name().to_string();
+                    let snap_dir = snap_entry.text().to_string();
+                    instr_tv
+                        .buffer()
+                        .set_text(&btrfs_instructions(&name, &snap_dir));
+                    del_btn.set_sensitive(true);
+                } else {
+                    del_btn.set_sensitive(false);
+                }
+            }
+        ));
+    }
+
+    // Create snapshot
+    {
+        let list_box = list_box.clone();
+        let snap_entry = snap_entry.clone();
+        let create_lbl = create_lbl.clone();
+        let source = source.clone();
+        let source_base = source_base.clone();
+        create_btn.connect_clicked(glib::clone!(
+            #[weak]
+            list_box,
+            move |_| {
+                let snap_dir = snap_entry.text().to_string();
+                let stamp = chrono::Local::now()
+                    .format("%Y-%m-%d_%H%M%S")
+                    .to_string();
+                let snap_name = format!("{}-{}", source_base, stamp);
+                let snap_path = format!("{}/{}", snap_dir, snap_name);
+
+                if let Err(e) = std::fs::create_dir_all(&snap_dir) {
+                    create_lbl
+                        .set_text(&format!("❌  Could not create snapshot dir: {e}"));
+                    return;
+                }
+
+                match std::process::Command::new("btrfs")
+                    .args(["subvolume", "snapshot", "-r", &source, &snap_path])
+                    .output()
+                {
+                    Ok(o) if o.status.success() => {
+                        create_lbl.set_text(&format!(
+                            "✅  Snapshot created: {}",
+                            snap_name
+                        ));
+                        btrfs_populate_list(&list_box, &snap_dir, &source_base);
+                    }
+                    Ok(o) => {
+                        let err =
+                            String::from_utf8_lossy(&o.stderr).trim().to_string();
+                        create_lbl.set_text(&format!("❌  btrfs error: {err}"));
+                    }
+                    Err(_) => {
+                        create_lbl.set_text(
+                            "❌  'btrfs' not found.  \
+                             Install with: sudo dnf install btrfs-progs",
+                        );
+                    }
+                }
+            }
+        ));
+    }
+
+    // Refresh list
+    {
+        let list_box = list_box.clone();
+        let snap_entry = snap_entry.clone();
+        refresh_btn.connect_clicked(glib::clone!(
+            #[weak]
+            list_box,
+            move |_| btrfs_populate_list(&list_box, &snap_entry.text(), &source_base)
+        ));
+    }
+
+    // Delete snapshot
+    {
+        let list_box = list_box.clone();
+        let snap_entry = snap_entry.clone();
+        del_btn.connect_clicked(glib::clone!(
+            #[weak]
+            list_box,
+            move |btn| {
+                if let Some(row) = list_box.selected_row() {
+                    let name = row.widget_name().to_string();
+                    let snap_path =
+                        format!("{}/{}", snap_entry.text(), name);
+                    match std::process::Command::new("btrfs")
+                        .args(["subvolume", "delete", &snap_path])
+                        .output()
+                    {
+                        Ok(o) if o.status.success() => {
+                            btrfs_populate_list(
+                                &list_box,
+                                &snap_entry.text(),
+                                "",
+                            );
+                            btn.set_sensitive(false);
+                        }
+                        Ok(o) => {
+                            eprintln!(
+                                "btrfs delete failed: {}",
+                                String::from_utf8_lossy(&o.stderr)
+                            );
+                        }
+                        Err(e) => eprintln!("btrfs not found: {e}"),
+                    }
+                }
+            }
+        ));
+    }
+
+    b
+}
+
+/// Populate a `ListBox` with snapshot subdirectories found in `snap_dir`
+/// whose names start with `prefix` (may be empty to show all).
+fn btrfs_populate_list(list_box: &ListBox, snap_dir: &str, prefix: &str) {
+    // Remove all existing rows.
+    while let Some(child) = list_box.first_child() {
+        list_box.remove(&child);
+    }
+
+    let dir = std::path::Path::new(snap_dir);
+    if !dir.exists() {
+        let row = ListBoxRow::new();
+        row.set_child(Some(
+            &Label::builder()
+                .label("(no snapshots yet)")
+                .halign(Align::Start)
+                .css_classes(vec!["dim-label"])
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+        return;
+    }
+
+    let mut entries: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            e.path().is_dir() && (prefix.is_empty() || name.starts_with(prefix))
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+
+    entries.sort_by(|a, b| b.cmp(a)); // newest first
+
+    if entries.is_empty() {
+        let row = ListBoxRow::new();
+        row.set_child(Some(
+            &Label::builder()
+                .label("(no snapshots yet)")
+                .halign(Align::Start)
+                .css_classes(vec!["dim-label"])
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+        return;
+    }
+
+    for name in entries {
+        let row = ListBoxRow::new();
+        row.set_widget_name(&name);
+        row.set_child(Some(
+            &Label::builder()
+                .label(&name)
+                .halign(Align::Start)
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build(),
+        ));
+        list_box.append(&row);
+    }
+}
+
+/// Generate the recovery instructions string for a snapshot.
+fn btrfs_instructions(snap_name: &str, snap_dir: &str) -> String {
+    // Try to resolve the device backing the snapshot directory.
+    let device = std::process::Command::new("findmnt")
+        .args(["--noheadings", "-o", "SOURCE", "--target", snap_dir])
+        .output()
+        .ok()
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        })
+        .unwrap_or_else(|| "/dev/<device>".to_string());
+
+    format!(
+        "Snapshot : {name}\n\
+         Location : {dir}/{name}\n\
+         Device   : {device}\n\
+         \n\
+         ── Access individual files ───────────────────────────\n\
+         1. Mount the BTRFS volume:\n\
+            sudo mount -o subvol=.btrfs-snapshots/{name} {device} /mnt/recovery\n\
+         \n\
+         2. Browse and copy files:\n\
+            ls /mnt/recovery/\n\
+            cp /mnt/recovery/Documents/file.txt ~/Documents/\n\
+         \n\
+         3. Unmount when done:\n\
+            sudo umount /mnt/recovery\n\
+         \n\
+         ── Full home directory restore ────────────────────────\n\
+         ⚠  WARNING: this replaces your entire home directory.\n\
+         \n\
+         1. Boot from a live USB or log in as a different user.\n\
+         2. Mount the BTRFS root volume:\n\
+            sudo mount {device} /mnt/btrfs\n\
+         3. Delete the current home subvolume:\n\
+            sudo btrfs subvolume delete /home/$USER\n\
+         4. Create a writable snapshot from the recovery point:\n\
+            sudo btrfs subvolume snapshot \\\n\
+              /mnt/btrfs/.btrfs-snapshots/{name} /home/$USER\n\
+         5. Reboot.\n",
+        name = snap_name,
+        dir = snap_dir,
+        device = device,
+    )
+}
 
 // ── About tab ──────────────────────────────────────────────────────────────────
 

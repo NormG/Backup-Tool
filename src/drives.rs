@@ -216,6 +216,28 @@ pub fn mount_by_uuid(uuid: &str) -> Result<String> {
     Ok(mountpoint)
 }
 
+/// Return the filesystem type (e.g. `"btrfs"`, `"ext4"`) of the partition
+/// that contains `path`, or `None` when `findmnt` fails or produces no output.
+pub fn detect_fstype(path: &str) -> Option<String> {
+    // Walk up to the nearest existing ancestor.
+    let resolved = {
+        let mut p = std::path::Path::new(path);
+        loop {
+            if p.exists() {
+                break p.to_path_buf();
+            }
+            p = p.parent()?;
+        }
+    };
+    let out = Command::new("findmnt")
+        .args(["--noheadings", "-o", "FSTYPE", "--target",
+               resolved.to_string_lossy().as_ref()])
+        .output()
+        .ok()?;
+    let fstype = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if fstype.is_empty() { None } else { Some(fstype) }
+}
+
 /// Returns `true` when `a` and `b` reside on the **same filesystem** (same
 /// kernel device number).  Walks up to the nearest existing ancestor if
 /// either path does not yet exist, so it works for proposed backup destinations
