@@ -992,8 +992,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     return;
                 }
                 if let Err(e) = std::fs::create_dir_all(&snap_dir) {
-                    create_lbl
-                        .set_text(&format!("❌  Could not create snapshot dir: {e}"));
+                    create_lbl.set_text(&format!("❌  Could not create snapshot dir: {e}"));
                     return;
                 }
                 match std::process::Command::new("btrfs")
