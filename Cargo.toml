@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["norm"]
 description = "GTK4 home-directory backup manager using rsync and systemd"
 license = "GPL-3.0"
-repository = ""
+repository = "https://github.com/NormG/Backup-Tool"
 
 [[bin]]
 name = "home-backup"
