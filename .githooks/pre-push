@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Auto-installed by push-gate. Do not edit manually.
+# Re-install with: gate install <projectdir>
+set -euo pipefail
+GATE="$(git config --get gate.path 2>/dev/null || echo "")"
+[[ -n "${GATE}" ]] || { echo "push-gate: gate.path not set. Run: gate install <projectdir>"; exit 1; }
+exec "${GATE}/gate" run "$(git rev-parse --show-toplevel)"
