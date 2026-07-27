@@ -119,4 +119,6 @@ impl Config {
 }
 
 // Used by #[serde(default = "default_one")] on Config::incremental_every_n_days.
-pub fn default_one() -> u32 { 1 }
+pub fn default_one() -> u32 {
+    1
+}

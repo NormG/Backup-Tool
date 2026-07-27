@@ -92,8 +92,17 @@ const USABLE_FS: &[&str] = &[
 // Mountpoints we never want to offer as backup destinations.
 // This list blocks the root and home partitions as well as all system paths.
 const SYSTEM_MOUNTS: &[&str] = &[
-    "/", "/home", "/boot", "/boot/efi", "/boot/grub", "/boot/grub2",
-    "/usr", "/var", "/tmp", "/opt", "/srv",
+    "/",
+    "/home",
+    "/boot",
+    "/boot/efi",
+    "/boot/grub",
+    "/boot/grub2",
+    "/usr",
+    "/var",
+    "/tmp",
+    "/opt",
+    "/srv",
     "[SWAP]",
 ];
 
@@ -237,15 +246,22 @@ pub fn detect_label_for_path(path: &str) -> Option<String> {
     let resolved = {
         let mut p = std::path::Path::new(path);
         loop {
-            if p.exists() { break p.to_path_buf(); }
+            if p.exists() {
+                break p.to_path_buf();
+            }
             p = p.parent()?;
         }
     };
 
     // Find the source device for the resolved path.
     let dev_out = Command::new("findmnt")
-        .args(["--noheadings", "-o", "SOURCE", "--target",
-               &resolved.to_string_lossy().into_owned()])
+        .args([
+            "--noheadings",
+            "-o",
+            "SOURCE",
+            "--target",
+            &resolved.to_string_lossy().into_owned(),
+        ])
         .output()
         .ok()?;
     let source = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();

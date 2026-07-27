@@ -248,7 +248,11 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
     let period = config.incremental_every_n_days.max(1);
     if period > 1 {
         if let Some(latest) = resolve_latest(dest_root) {
-            let name = latest.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let name = latest
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             // Date starts at index 5 (after "full-" or "inc-")
             if let Some(date_str) = name.get(5..15) {
                 if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {

@@ -1,9 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gtk4::{
-    glib, prelude::*, Align, ApplicationWindow, Box as GBox, Button, ComboBoxText, DropDown,
-    Entry, FileChooserAction, FileChooserDialog, Frame, Label, Orientation, ResponseType,
-    ScrolledWindow, SpinButton, Stack, StringList, TextView, WrapMode,
+    glib, prelude::*, Align, ApplicationWindow, Box as GBox, Button, ComboBoxText, DropDown, Entry,
+    FileChooserAction, FileChooserDialog, Frame, Label, Orientation, ResponseType, ScrolledWindow,
+    SpinButton, Stack, StringList, TextView, WrapMode,
 };
 
 use crate::{config::Config, drives, systemd};
@@ -75,8 +75,8 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
     let (p_source, source_entry) = build_source(Rc::clone(&cfg));
     let (p_drive, drive_drop, drive_dest_entry, refresh_btn) =
         build_drive(Rc::clone(&cfg), Rc::clone(&drives_state));
-    let (p_schedule, day_combo, hour_spin, min_spin, ret_spin, inc_spin,
-         is_24h_sched, ampm_sched) = build_schedule(Rc::clone(&cfg));
+    let (p_schedule, day_combo, hour_spin, min_spin, ret_spin, inc_spin, is_24h_sched, ampm_sched) =
+        build_schedule(Rc::clone(&cfg));
     let (p_excludes, excludes_tv) = build_excludes(Rc::clone(&cfg));
     let (p_review, review_lbl) = build_review();
     let (p_done, done_lbl) = build_done();
@@ -156,7 +156,9 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
             // held the guard here.
             let prev = {
                 let mut idx = current_page.borrow_mut();
-                if *idx == 0 { return; }
+                if *idx == 0 {
+                    return;
+                }
                 *idx -= 1;
                 pages[*idx]
             };
@@ -483,19 +485,19 @@ fn build_drive(
 
 fn h24_to_12h(h24: u8) -> (u8, bool) {
     match h24 {
-        0      => (12, false),
+        0 => (12, false),
         1..=11 => (h24, false),
-        12     => (12, true),
-        h      => (h - 12, true),
+        12 => (12, true),
+        h => (h - 12, true),
     }
 }
 
 fn h12_to_24h(h12: u8, pm: bool) -> u8 {
     match (pm, h12) {
         (false, 12) => 0,
-        (false, h)  => h,
-        (true,  12) => 12,
-        (true,  h)  => h + 12,
+        (false, h) => h,
+        (true, 12) => 12,
+        (true, h) => h + 12,
     }
 }
 
@@ -504,8 +506,14 @@ fn h12_to_24h(h12: u8, pm: bool) -> u8 {
 fn build_schedule(
     cfg: Rc<RefCell<Config>>,
 ) -> (
-    GBox, ComboBoxText, SpinButton, SpinButton, SpinButton, SpinButton,
-    Rc<RefCell<bool>>, ComboBoxText,
+    GBox,
+    ComboBoxText,
+    SpinButton,
+    SpinButton,
+    SpinButton,
+    SpinButton,
+    Rc<RefCell<bool>>,
+    ComboBoxText,
 ) {
     let b = page_box();
     b.append(&section_label("Backup Schedule"));
@@ -514,15 +522,25 @@ fn build_schedule(
     b.append(&sub_label("Full backup day of week:"));
     let day_combo = ComboBoxText::new();
     for day in &[
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
     ] {
         day_combo.append_text(day);
     }
     let stored_day = cfg.borrow().full_backup_day.clone();
     let idx = [
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
     ]
     .iter()
     .position(|&d| d.eq_ignore_ascii_case(&stored_day))
@@ -587,10 +605,7 @@ fn build_schedule(
                 btn.set_label("Use 24 hr");
                 *is_24h_time.borrow_mut() = false;
             } else {
-                let h24 = h12_to_24h(
-                    hour_spin.value() as u8,
-                    ampm_combo_time.active() == Some(1),
-                );
+                let h24 = h12_to_24h(hour_spin.value() as u8, ampm_combo_time.active() == Some(1));
                 hour_spin.set_range(0.0, 23.0);
                 hour_spin.set_value(f64::from(h24));
                 suffix_lbl.set_visible(true);
@@ -604,7 +619,12 @@ fn build_schedule(
     // Retention
     b.append(&sub_label("Keep incremental snapshots for (days):"));
     let adj_ret = gtk4::Adjustment::new(
-        f64::from(cfg.borrow().retention_days), 1.0, 365.0, 1.0, 7.0, 0.0,
+        f64::from(cfg.borrow().retention_days),
+        1.0,
+        365.0,
+        1.0,
+        7.0,
+        0.0,
     );
     let ret_spin = SpinButton::new(Some(&adj_ret), 1.0, 0);
     b.append(&ret_spin);
@@ -614,12 +634,26 @@ fn build_schedule(
         "Run incremental backup every N days (1 = daily, 2 = every other day, 7 = weekly):",
     ));
     let adj_inc = gtk4::Adjustment::new(
-        f64::from(cfg.borrow().incremental_every_n_days.max(1)), 1.0, 7.0, 1.0, 1.0, 0.0,
+        f64::from(cfg.borrow().incremental_every_n_days.max(1)),
+        1.0,
+        7.0,
+        1.0,
+        1.0,
+        0.0,
     );
     let inc_spin = SpinButton::new(Some(&adj_inc), 1.0, 0);
     b.append(&inc_spin);
 
-    (b, day_combo, hour_spin, min_spin, ret_spin, inc_spin, is_24h_time, ampm_combo_time)
+    (
+        b,
+        day_combo,
+        hour_spin,
+        min_spin,
+        ret_spin,
+        inc_spin,
+        is_24h_time,
+        ampm_combo_time,
+    )
 }
 
 // Page 4 – Excludes

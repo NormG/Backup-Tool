@@ -4,12 +4,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::{backup, config::Config, systemd};
 use gtk4::{
     glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, FileChooserAction,
     FileChooserDialog, Frame, Label, Notebook, Orientation, ResponseType, ScrolledWindow,
     SpinButton, Switch, TextView, WrapMode,
 };
-use crate::{backup, config::Config, systemd};
 
 // ── Entry-point ───────────────────────────────────────────────────────────────
 
@@ -41,7 +41,10 @@ pub fn show(app: &gtk4::Application, config: Config) {
 
     // ── Tab 4 — Settings (source / destination) ──────────────────────────────
     let settings_page = build_settings(Rc::clone(&cfg));
-    nb.append_page(&settings_page, Some(&Label::new(Some("Source/Destination"))));
+    nb.append_page(
+        &settings_page,
+        Some(&Label::new(Some("Source/Destination"))),
+    );
 
     // ── Tab 5 — Log ───────────────────────────────────────────────────────────
     let log_page = build_log();
@@ -431,9 +434,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
         .halign(Align::End)
         .margin_top(16)
         .build();
-    let save_lbl = Label::builder()
-        .halign(Align::Start)
-        .build();
+    let save_lbl = Label::builder().halign(Align::Start).build();
 
     {
         let cfg = Rc::clone(&cfg);
@@ -470,8 +471,9 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
             }
             match systemd::update_timer(&cfg.borrow()) {
                 Ok(()) => save_lbl.set_text("✅  Schedule saved and timer reloaded."),
-                Err(e) => save_lbl
-                    .set_text(&format!("⚠  Saved config but timer reload failed: {e}")),
+                Err(e) => {
+                    save_lbl.set_text(&format!("⚠  Saved config but timer reload failed: {e}"))
+                }
             }
         });
     }
@@ -677,7 +679,7 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
         let cfg = Rc::clone(&cfg);
         let save_lbl = save_lbl.clone();
         save_btn.connect_clicked(move |_| {
-            let new_src  = src_entry.text().to_string();
+            let new_src = src_entry.text().to_string();
             let new_dest = dest_entry.text().to_string();
 
             // Refuse same-device configurations.
@@ -695,7 +697,7 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
             {
                 let mut c = cfg.borrow_mut();
                 c.source_dir = new_src;
-                c.dest_dir   = new_dest;
+                c.dest_dir = new_dest;
             }
             match cfg.borrow().save() {
                 Ok(()) => save_lbl.set_text("✅  Paths saved."),
@@ -784,10 +786,10 @@ fn load_log(tv: &TextView) {
 /// 24-hour hour → (12-hour display value, is_pm)
 fn h24_to_12h(h24: u8) -> (u8, bool) {
     match h24 {
-        0       => (12, false),
-        1..=11  => (h24, false),
-        12      => (12, true),
-        h       => (h - 12, true),
+        0 => (12, false),
+        1..=11 => (h24, false),
+        12 => (12, true),
+        h => (h - 12, true),
     }
 }
 
@@ -795,9 +797,9 @@ fn h24_to_12h(h24: u8) -> (u8, bool) {
 fn h12_to_24h(h12: u8, pm: bool) -> u8 {
     match (pm, h12) {
         (false, 12) => 0,
-        (false, h)  => h,
-        (true,  12) => 12,
-        (true,  h)  => h + 12,
+        (false, h) => h,
+        (true, 12) => 12,
+        (true, h) => h + 12,
     }
 }
 
