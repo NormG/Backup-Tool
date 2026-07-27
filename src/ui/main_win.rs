@@ -1051,14 +1051,10 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                     return;
                 }
 
-                let snap_args = [
-                    "subvolume", "snapshot", "-r", &actual_source, &snap_path,
-                ];
+                let snap_args = ["subvolume", "snapshot", "-r", &actual_source, &snap_path];
 
                 // Try without elevation first; retry via pkexec on EPERM.
-                let output = std::process::Command::new("btrfs")
-                    .args(snap_args)
-                    .output();
+                let output = std::process::Command::new("btrfs").args(snap_args).output();
 
                 let needs_elevation = matches!(&output,
                     Ok(o) if !o.status.success() && {
@@ -1142,10 +1138,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                             btrfs_populate_list(&list_box, &snap_entry.text(), "");
                             btn.set_sensitive(false);
                         }
-                        Ok(o) => eprintln!(
-                            "btrfs delete: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        ),
+                        Ok(o) => eprintln!("btrfs delete: {}", String::from_utf8_lossy(&o.stderr)),
                         Err(e) => eprintln!("btrfs not found: {e}"),
                     }
                 }
