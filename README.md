@@ -151,7 +151,7 @@ The manager has five tabs:
 - **Reset to defaults** restores the built-in pattern set
 - **Save** writes to the config file; takes effect on the next backup
 
-### Source / Destination
+### Paths
 - Change the source directory (Browse button)
 - Change the backup destination path (Browse button)
 - Drive UUID and label displayed for reference

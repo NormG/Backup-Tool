@@ -25,32 +25,25 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .build();
 
     let nb = Notebook::new();
+    // Scrollable so all tabs are reachable even when the window is narrow.
+    nb.set_scrollable(true);
     win.set_child(Some(&nb));
 
-    // ── Tab 1 — Dashboard ─────────────────────────────────────────────────
     let (dash_page, status_lbl) = build_dashboard(Rc::clone(&cfg));
     nb.append_page(&dash_page, Some(&Label::new(Some("Dashboard"))));
 
-    // ── Tab 2 — Schedule ──────────────────────────────────────────────────
     let sched_page = build_schedule(Rc::clone(&cfg));
     nb.append_page(&sched_page, Some(&Label::new(Some("Schedule"))));
 
-    // ── Tab 3 — Excludes ──────────────────────────────────────────────────
     let excl_page = build_excludes(Rc::clone(&cfg));
     nb.append_page(&excl_page, Some(&Label::new(Some("Excludes"))));
 
-    // ── Tab 4 — Settings (source / destination) ──────────────────────────────
     let settings_page = build_settings(Rc::clone(&cfg));
-    nb.append_page(
-        &settings_page,
-        Some(&Label::new(Some("Source/Destination"))),
-    );
+    nb.append_page(&settings_page, Some(&Label::new(Some("Paths"))));
 
-    // ── Tab 5 — Log ───────────────────────────────────────────────────────────
     let log_page = build_log();
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
-    // ── Tab 6 — About ─────────────────────────────────────────────────────────
     let about_page = build_about();
     nb.append_page(&about_page, Some(&Label::new(Some("About"))));
 
