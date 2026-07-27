@@ -843,38 +843,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(&gtk4::Separator::new(Orientation::Horizontal));
 
-    // ── Requirement notes ───────────────────────────────────────
+    // ── Requirement notes ───────────────────────────────────────────
     b.append(
         &Label::builder()
             .label(
-                "ℹ  Snapshots must be outside the source subvolume and on the \
-                 same Btrfs volume.  The default path /home/.snapshots is \
-                 root-owned — run this once to allow your user to write there:",
-            )
-            .halign(Align::Start)
-            .wrap(true)
-            .css_classes(vec!["dim-label"])
-            .build(),
-    );
-
-    // Copyable one-time setup command.
-    // chmod 1777 (sticky-bit, like /tmp) lets any user create snapshots there
-    // while preventing users from deleting each other's snapshots.
-    let setup_cmd =
-        "sudo mkdir -p /home/.snapshots && sudo chmod 1777 /home/.snapshots".to_string();
-    b.append(
-        &gtk4::Entry::builder()
-            .text(&setup_cmd)
-            .editable(false)
-            .margin_bottom(4)
-            .build(),
-    );
-
-    b.append(
-        &Label::builder()
-            .label(
-                "ℹ  To export snapshots to an ext4 drive, use \
-                 'btrfs send / btrfs receive' (Phase 2 — not yet in this GUI).",
+                "ℹ  Snapshots must be on the same Btrfs volume as the source, \
+                 outside the source subvolume.  \
+                 /home/.snapshots is created automatically by the RPM installer.",
             )
             .halign(Align::Start)
             .wrap(true)
@@ -889,9 +864,6 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
-    // Default to a sibling directory on the same Btrfs volume as the source.
-    // The user must run the one-time setup command above if /home/.snapshots
-    // does not yet exist.
     let source_parent = std::path::Path::new(&source)
         .parent()
         .unwrap_or(std::path::Path::new("/"))
