@@ -89,8 +89,13 @@ const USABLE_FS: &[&str] = &[
     "ext4", "ext3", "ext2", "xfs", "btrfs", "ntfs", "exfat", "vfat",
 ];
 
-// Mountpoints we never want to show — these are system partitions.
-const SYSTEM_MOUNTS: &[&str] = &["/", "/boot", "/boot/efi", "[SWAP]"];
+// Mountpoints we never want to offer as backup destinations.
+// This list blocks the root and home partitions as well as all system paths.
+const SYSTEM_MOUNTS: &[&str] = &[
+    "/", "/home", "/boot", "/boot/efi", "/boot/grub", "/boot/grub2",
+    "/usr", "/var", "/tmp", "/opt", "/srv",
+    "[SWAP]",
+];
 
 /// Enumerate all block-device partitions that could host backups.
 ///
@@ -200,6 +205,24 @@ pub fn mount_by_uuid(uuid: &str) -> Result<String> {
         .context("parsing udisksctl mount output")?;
 
     Ok(mountpoint)
+}
+
+/// Returns `true` when `a` and `b` reside on the **same filesystem** (same
+/// kernel device number).  Walks up to the nearest existing ancestor if
+/// either path does not yet exist, so it works for proposed backup destinations
+/// that haven't been created yet.
+pub fn is_same_device(a: &std::path::Path, b: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let dev_of = |p: &std::path::Path| -> Option<u64> {
+        let mut cur = p;
+        loop {
+            match std::fs::metadata(cur) {
+                Ok(m) => return Some(m.dev()),
+                Err(_) => cur = cur.parent()?,
+            }
+        }
+    };
+    matches!((dev_of(a), dev_of(b)), (Some(da), Some(db)) if da == db)
 }
 
 /// Find the current mountpoint of a partition with the given UUID by querying

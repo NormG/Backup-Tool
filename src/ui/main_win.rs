@@ -335,6 +335,21 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     let ret_spin = SpinButton::new(Some(&adj_ret), 1.0, 0);
     b.append(&ret_spin);
 
+    // Incremental period
+    b.append(&field_label(
+        "Run incremental backup every N days (1 = daily, 7 = weekly):",
+    ));
+    let adj_inc = gtk4::Adjustment::new(
+        f64::from(cfg.borrow().incremental_every_n_days.max(1)),
+        1.0,
+        7.0,
+        1.0,
+        1.0,
+        0.0,
+    );
+    let inc_spin = SpinButton::new(Some(&adj_inc), 1.0, 0);
+    b.append(&inc_spin);
+
     // Save button
     let save_btn = Button::builder()
         .label("Save & Reload Timer")
@@ -342,7 +357,9 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
         .halign(Align::End)
         .margin_top(16)
         .build();
-    let save_lbl = Label::builder().halign(Align::Start).build();
+    let save_lbl = Label::builder()
+        .halign(Align::Start)
+        .build();
 
     {
         let cfg = Rc::clone(&cfg);
@@ -356,11 +373,13 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
             let h = hour_spin.value() as u8;
             let m = min_spin.value() as u8;
             let ret = ret_spin.value() as u32;
+            let inc = inc_spin.value() as u32;
             {
                 let mut c = cfg.borrow_mut();
                 c.full_backup_day = day;
                 c.backup_time = format!("{h:02}:{m:02}");
                 c.retention_days = ret;
+                c.incremental_every_n_days = inc;
             }
             match cfg.borrow().save() {
                 Ok(()) => {}
@@ -371,13 +390,11 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
             }
             match systemd::update_timer(&cfg.borrow()) {
                 Ok(()) => save_lbl.set_text("✅  Schedule saved and timer reloaded."),
-                Err(e) => {
-                    save_lbl.set_text(&format!("⚠  Saved config but timer reload failed: {e}"))
-                }
+                Err(e) => save_lbl
+                    .set_text(&format!("⚠  Saved config but timer reload failed: {e}")),
             }
         });
     }
-
     b.append(&save_btn);
     b.append(&save_lbl);
     b

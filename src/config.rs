@@ -21,6 +21,10 @@ pub struct Config {
     pub excludes: Vec<String>,
     /// Number of days incremental backups are kept before deletion.
     pub retention_days: u32,
+    /// How many days must pass between incremental backups (1 = every day).
+    /// Old config files that omit this field default to 1.
+    #[serde(default = "default_one")]
+    pub incremental_every_n_days: u32,
     /// True after a successful first install so the wizard is not shown again.
     pub installed: bool,
 }
@@ -54,6 +58,7 @@ impl Default for Config {
                 "*~".to_string(),
             ],
             retention_days: 30,
+            incremental_every_n_days: 1,
             installed: false,
         }
     }
@@ -112,3 +117,6 @@ impl Config {
         (h, m)
     }
 }
+
+// Used by #[serde(default = "default_one")] on Config::incremental_every_n_days.
+pub fn default_one() -> u32 { 1 }

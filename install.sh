@@ -147,10 +147,11 @@ cmd_uninstall() {
         [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
     fi
     step "Disabling systemd timer…"
-    systemctl --user disable --now "${BINARY_NAME}.timer" 2>/dev/null && ok "Timer stopped" || true
+    ${RUN_AS} systemctl --user disable --now "${BINARY_NAME}.timer" 2>/dev/null \
+        && ok "Timer stopped" || true
     step "Removing systemd units…"
     rm -f "${SERVICE_FILE}" "${TIMER_FILE}"
-    systemctl --user daemon-reload 2>/dev/null || true
+    ${RUN_AS} systemctl --user daemon-reload 2>/dev/null || true
     ok "Systemd units removed"
     step "Removing binary and assets…"
     rm -f  "${INSTALLED_BIN}"
@@ -159,7 +160,7 @@ cmd_uninstall() {
     ok "Binary and assets removed"
     step "Removing launcher…"
     rm -f "${DESKTOP_DEST}"
-    update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
+    update-desktop-database "${REAL_HOME}/.local/share/applications" 2>/dev/null || true
     ok "Launcher removed"
     echo
     green "Uninstall complete."
@@ -237,15 +238,16 @@ cmd_install() {
         warn "PNG not found — launcher may show a generic icon"
     fi
     [[ -f "${icon_svg}" ]] && cp "${icon_svg}" "${ICON_DEST_SVG_FILE}" && ok "SVG icon installed"
-    gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" 2>/dev/null || true
+    ${RUN_AS} gtk-update-icon-cache -f -t \
+        "${REAL_HOME}/.local/share/icons/hicolor" 2>/dev/null || true
 
     # ── .desktop launcher ────────────────────────────────────────────────
     step "Installing application launcher…"
-    mkdir -p "$(dirname "${DESKTOP_DEST}")"
+    ${RUN_AS} mkdir -p "$(dirname "${DESKTOP_DEST}")"
     sed "s|@EXEC@|${INSTALLED_BIN}|g" \
         "${SCRIPT_DIR}/assets/${BINARY_NAME}.desktop" \
         > "${DESKTOP_DEST}"
-    update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
+    update-desktop-database "${REAL_HOME}/.local/share/applications" 2>/dev/null || true
     ok "Launcher installed: ${DESKTOP_DEST}"
 
     # ── Summary ──────────────────────────────────────────────────────────

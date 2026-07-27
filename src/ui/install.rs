@@ -74,7 +74,8 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
     let (p_source, source_entry) = build_source(Rc::clone(&cfg));
     let (p_drive, drive_drop, drive_dest_entry, refresh_btn) =
         build_drive(Rc::clone(&cfg), Rc::clone(&drives_state));
-    let (p_schedule, day_combo, hour_spin, min_spin, ret_spin) = build_schedule(Rc::clone(&cfg));
+    let (p_schedule, day_combo, hour_spin, min_spin, ret_spin, inc_spin) =
+        build_schedule(Rc::clone(&cfg));
     let (p_excludes, excludes_tv) = build_excludes(Rc::clone(&cfg));
     let (p_review, review_lbl) = build_review();
     let (p_done, done_lbl) = build_done();
@@ -190,6 +191,8 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
         #[strong]
         ret_spin,
         #[strong]
+        inc_spin,
+        #[strong]
         excludes_tv,
         #[strong]
         review_lbl,
@@ -227,10 +230,12 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
                     let h = hour_spin.value() as u8;
                     let m = min_spin.value() as u8;
                     let ret = ret_spin.value() as u32;
+                    let inc = inc_spin.value() as u32;
                     let mut c = cfg.borrow_mut();
                     c.full_backup_day = day;
                     c.backup_time = format!("{h:02}:{m:02}");
                     c.retention_days = ret;
+                    c.incremental_every_n_days = inc;
                 }
                 4 => {
                     // excludes page
@@ -463,7 +468,7 @@ fn build_drive(
 // Page 3 – Schedule
 fn build_schedule(
     cfg: Rc<RefCell<Config>>,
-) -> (GBox, ComboBoxText, SpinButton, SpinButton, SpinButton) {
+) -> (GBox, ComboBoxText, SpinButton, SpinButton, SpinButton, SpinButton) {
     let b = page_box();
     b.append(&section_label("Backup Schedule"));
 
@@ -528,7 +533,22 @@ fn build_schedule(
     let ret_spin = SpinButton::new(Some(&adj_ret), 1.0, 0);
     b.append(&ret_spin);
 
-    (b, day_combo, hour_spin, min_spin, ret_spin)
+    // Incremental period
+    b.append(&sub_label(
+        "Run incremental backup every N days (1 = daily, 2 = every other day, 7 = weekly):",
+    ));
+    let adj_inc = gtk4::Adjustment::new(
+        f64::from(cfg.borrow().incremental_every_n_days.max(1)),
+        1.0,
+        7.0,
+        1.0,
+        1.0,
+        0.0,
+    );
+    let inc_spin = SpinButton::new(Some(&adj_inc), 1.0, 0);
+    b.append(&inc_spin);
+
+    (b, day_combo, hour_spin, min_spin, ret_spin, inc_spin)
 }
 
 // Page 4 – Excludes
@@ -621,13 +641,19 @@ fn refresh_drives(drop: &DropDown, drives_state: &Rc<RefCell<Vec<drives::DriveIn
 }
 
 fn build_review_text(cfg: &Config) -> String {
+    let inc_desc = match cfg.incremental_every_n_days {
+        1 => "daily".to_string(),
+        7 => "weekly".to_string(),
+        n => format!("every {n} days"),
+    };
     format!(
-        "Source directory : {}\n\
+        "Source directory  : {}\n\
          Backup destination: {}\n\
          Drive UUID        : {}\n\
          Drive label       : {}\n\
          Full backup day   : {}\n\
          Daily time        : {}\n\
+         Incrementals      : {inc_desc}\n\
          Retention         : {} days\n\
          Excludes          : {} patterns\n\n\
          What will be installed:\n\
@@ -664,6 +690,26 @@ fn do_install(
             show_error(
                 win,
                 "Backup destination path is empty.  Please choose a drive.",
+            );
+            return;
+        }
+
+        // Block backing up to the same filesystem as the source.
+        // This catches both the obvious case (dest inside ~/) and subtler
+        // cases where a bind-mount or second partition on the same disk is
+        // selected.
+        if drives::is_same_device(
+            std::path::Path::new(&c.source_dir),
+            std::path::Path::new(&c.dest_dir),
+        ) {
+            show_error(
+                win,
+                "The backup destination is on the same filesystem as the source 
+directory.\n\n\
+                 Backing up to the same drive defeats the purpose of a backup — 
+if the\n\
+                 drive fails you lose both your data and its backup.\n\n\
+                 Please choose a different physical drive.",
             );
             return;
         }

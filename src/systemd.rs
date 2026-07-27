@@ -97,8 +97,14 @@ pub fn install(config: &Config) -> Result<String> {
     run_systemctl(&["enable", "--now", TIMER])?;
     log.push(format!("  Enabled and started {TIMER}"));
 
-    // ── Desktop icon & launcher ───────────────────────────────────────────
+    // ── Desktop icon & launcher ────────────────────────────────────────────────
     install_desktop_files(&bin, &mut log)?;
+
+    // ── Nautilus bookmark ───────────────────────────────────────────────
+    match manage_nautilus_bookmark(&config.dest_dir) {
+        Ok(()) => log.push(format!("  Updated Nautilus bookmark → {}", config.dest_dir)),
+        Err(e) => log.push(format!("  ⚠  Nautilus bookmark skipped: {e}")),
+    }
 
     Ok(log.join("\n"))
 }
@@ -183,6 +189,53 @@ fn current_exe() -> Result<String> {
     std::env::current_exe()
         .context("resolving current executable path")
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Add (or refresh) a Nautilus/Files sidebar bookmark for the backup destination.
+///
+/// Strips any pre-existing `home-backup` entries first so re-installs don't
+/// accumulate stale bookmarks.
+fn manage_nautilus_bookmark(dest_dir: &str) -> Result<()> {
+    let bookmarks_path = dirs::config_dir()
+        .context("no config dir")?
+        .join("gtk-3.0")
+        .join("bookmarks");
+
+    // Ensure the parent directory exists (GTK3 may not have created it yet).
+    if let Some(parent) = bookmarks_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Read the existing bookmark list (empty string if the file doesn't exist).
+    let existing = if bookmarks_path.exists() {
+        std::fs::read_to_string(&bookmarks_path)?
+    } else {
+        String::new()
+    };
+
+    // Remove any lines that were previously added by this tool:
+    // match on the URI prefix so both old and new dest paths are cleaned.
+    let filtered: Vec<&str> = existing
+        .lines()
+        .filter(|l| {
+            // Drop lines that look like a previously installed backup bookmark.
+            !l.contains("home_backups") && !l.contains("home-backup")
+        })
+        .collect();
+
+    // Append the fresh entry.  The label shown in the sidebar follows the URI.
+    let dest_uri = format!("file://{dest_dir}");
+    let new_line = format!("{dest_uri} Home Backups");
+
+    let mut output = filtered.join("\n");
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(&new_line);
+    output.push('\n');
+
+    std::fs::write(&bookmarks_path, output)?;
+    Ok(())
 }
 
 fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {

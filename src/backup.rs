@@ -21,6 +21,9 @@ pub enum BackupKind {
     /// Decide automatically: full on the configured day-of-week or when no
     /// full snapshot exists yet; incremental otherwise.
     Auto,
+    /// The incremental period has not elapsed since the last snapshot;
+    /// exit cleanly without creating a new snapshot.
+    Skip,
 }
 
 impl std::str::FromStr for BackupKind {
@@ -45,8 +48,18 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     // ── 2. Determine full vs incremental ──────────────────────────────────
     let effective_kind = match kind {
         BackupKind::Auto => auto_kind(config, &dest_root),
+        BackupKind::Skip => {
+            return Ok("Backup skipped (called with Skip kind directly).".to_string());
+        }
         other => other,
     };
+    if effective_kind == BackupKind::Skip {
+        let msg = format!(
+            "Backup skipped — last snapshot is within the {}-day incremental period.",
+            config.incremental_every_n_days
+        );
+        return Ok(msg);
+    }
 
     // ── 3. Prepare paths ──────────────────────────────────────────────────
     let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
@@ -212,8 +225,8 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
     )
 }
 
-/// Decide the backup kind based on the current day of week and whether any
-/// full snapshot already exists under `dest_root`.
+/// Decide the backup kind based on the day of week, existing snapshots,
+/// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
     let today = Local::now().format("%A").to_string(); // "Monday", "Tuesday", …
     let is_full_day = today.eq_ignore_ascii_case(&config.full_backup_day);
@@ -227,10 +240,29 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
         .unwrap_or(false);
 
     if is_full_day || !full_exists {
-        BackupKind::Full
-    } else {
-        BackupKind::Incremental
+        return BackupKind::Full;
     }
+
+    // Check whether the incremental period has elapsed since the last snapshot.
+    // Snapshot names: {full,inc}-YYYY-MM-DD_HHmmss
+    let period = config.incremental_every_n_days.max(1);
+    if period > 1 {
+        if let Some(latest) = resolve_latest(dest_root) {
+            let name = latest.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            // Date starts at index 5 (after "full-" or "inc-")
+            if let Some(date_str) = name.get(5..15) {
+                if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                    let today_date = Local::now().date_naive();
+                    let days_since = (today_date - date).num_days();
+                    if days_since < i64::from(period) {
+                        return BackupKind::Skip;
+                    }
+                }
+            }
+        }
+    }
+
+    BackupKind::Incremental
 }
 
 /// Find the most-recently-modified snapshot directory (full or inc) under
