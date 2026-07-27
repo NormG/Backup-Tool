@@ -1436,17 +1436,46 @@ fn btrfs_populate_list(list_box: &ListBox, snap_dir: &str, prefix: &str) {
     }
 
     for name in entries {
+        let snap_path = format!("{}/{}", snap_dir, name);
+
+        // Get disk usage via `du -sh`; Btrfs reports shared/CoW blocks correctly.
+        let size_str = std::process::Command::new("du")
+            .args(["-sh", &snap_path])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .split_whitespace()
+                    .next()
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "?".to_string());
+
         let row = ListBoxRow::new();
         row.set_widget_name(&name);
-        row.set_child(Some(
+
+        let row_box = GBox::new(Orientation::Horizontal, 0);
+        row_box.set_margin_start(8);
+        row_box.set_margin_top(4);
+        row_box.set_margin_bottom(4);
+
+        row_box.append(
             &Label::builder()
                 .label(&name)
                 .halign(Align::Start)
-                .margin_start(8)
-                .margin_top(4)
-                .margin_bottom(4)
+                .hexpand(true)
                 .build(),
-        ));
+        );
+        row_box.append(
+            &Label::builder()
+                .label(&size_str)
+                .halign(Align::End)
+                .css_classes(vec!["dim-label"])
+                .margin_end(8)
+                .build(),
+        );
+
+        row.set_child(Some(&row_box));
         list_box.append(&row);
     }
 }
