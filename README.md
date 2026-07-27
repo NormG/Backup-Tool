@@ -110,22 +110,31 @@ window opens.
 
 ## Main Window
 
-The manager has four tabs:
+The manager has five tabs:
 
 ### Dashboard
-- Current config summary (source, destination, drive, schedule)
+- Current config summary with live drive-label detection
 - Timer status and next scheduled run
 - **Run now** buttons: *Auto (smart)* · *Force Full* · *Force Incremental*
 - Toggle switch to enable / disable the scheduled timer
 
 ### Schedule
-- Change the full-backup day, daily time, and incremental retention
+- Full-backup day of week
+- Daily backup time with **12h / 24h toggle** — zero-padded spinbuttons, AM/PM selector
+- Incremental backup period (1 = daily … 7 = weekly)
+- Retention days for incremental snapshots
 - **Save & Reload Timer** rewrites the systemd timer unit and restarts it
 
 ### Excludes
 - Edit the rsync exclude pattern list
 - **Reset to defaults** restores the built-in pattern set
 - **Save** writes to the config file; takes effect on the next backup
+
+### Source / Destination
+- Change the source directory (Browse button)
+- Change the backup destination path (Browse button)
+- Drive UUID and label displayed for reference
+- Same-filesystem guard prevents saving an unsafe configuration
 
 ### Log
 - Shows the content of `~/.local/share/home-backup/backup.log`
@@ -167,18 +176,25 @@ excludes = [
     ".thumbnails/",
     ".var/app/*/cache/",
     ".mozilla/firefox/*/cache2/",
+    ".config/google-chrome/*/Cache/",
+    ".config/chromium/*/Cache/",
     ".local/share/Trash/",
     ".Trash-*/",
     "*.iso",
     ".extras/",
     "lost+found/",
     ".gvfs/",
+    ".cargo/",     # Rust registry, git checkouts, compiled bins — all regenerable
     "*~",
 ]
 ```
 
-All fields can be edited in the GUI. Saving from the Schedule or Excludes tab
-writes to this file immediately.
+All fields can be edited in the GUI. Saving from any tab writes to this file
+immediately.
+
+> **Tip:** If you want to keep `~/.cargo/credentials.toml` or `~/.cargo/bin/`
+> backed up but skip the large cache, replace `.cargo/` with
+> `.cargo/registry/` and `.cargo/git/` in the Excludes tab.
 
 ---
 
