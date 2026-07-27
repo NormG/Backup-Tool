@@ -1222,8 +1222,22 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     send_row.append(&send_lbl);
     b.append(&send_row);
 
-    // Sent archives list
-    b.append(&field_label("Sent archives:"));
+    // Sent archives list + toolbar
+    let archives_hdr = GBox::new(Orientation::Horizontal, 8);
+    archives_hdr.append(&field_label("Sent archives:"));
+    let refresh_archives_btn = Button::builder()
+        .label("↺")
+        .tooltip_text("Refresh archive list")
+        .build();
+    let delete_archive_btn = Button::builder()
+        .label("Delete Archive")
+        .css_classes(vec!["destructive-action"])
+        .tooltip_text("Delete the selected archive from disk")
+        .sensitive(false)
+        .build();
+    archives_hdr.append(&refresh_archives_btn);
+    archives_hdr.append(&delete_archive_btn);
+    b.append(&archives_hdr);
     let send_list = ListBox::builder()
         .selection_mode(SelectionMode::Single)
         .build();
@@ -1273,14 +1287,16 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     ));
     b.append(&instr_frame);
 
-    // Wire send_list selection → receive instructions
+    // Wire send_list selection → receive instructions + enable delete btn
     {
         let recv_tv = recv_tv.clone();
         let send_dest_entry = send_dest_entry.clone();
+        let delete_archive_btn = delete_archive_btn.clone();
         send_list.connect_row_selected(glib::clone!(
             #[weak]
             recv_tv,
             move |_, row| {
+                delete_archive_btn.set_sensitive(row.is_some());
                 if let Some(row) = row {
                     let name = row.widget_name().to_string();
                     let dest = send_dest_entry.text().to_string();
@@ -1290,6 +1306,43 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 }
             }
         ));
+    }
+
+    // Wire refresh archives button
+    {
+        let send_list = send_list.clone();
+        let send_dest_entry = send_dest_entry.clone();
+        refresh_archives_btn.connect_clicked(move |_| {
+            btrfs_populate_send_list(&send_list, &send_dest_entry.text());
+        });
+    }
+
+    // Wire delete archive button
+    {
+        let send_list = send_list.clone();
+        let send_dest_entry = send_dest_entry.clone();
+        let delete_archive_btn_c = delete_archive_btn.clone();
+        let send_lbl = send_lbl.clone();
+        delete_archive_btn.connect_clicked(move |_| {
+            let Some(row) = send_list.selected_row() else {
+                return;
+            };
+            let name = row.widget_name().to_string();
+            if name.is_empty() || !name.ends_with(".btrfs.gz") {
+                return;
+            }
+            let path = format!("{}/{}", send_dest_entry.text(), name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    send_lbl.set_text(&format!("\u{2705}  Deleted {name}"));
+                    btrfs_populate_send_list(&send_list, &send_dest_entry.text());
+                    delete_archive_btn_c.set_sensitive(false);
+                }
+                Err(e) => {
+                    send_lbl.set_text(&format!("\u{274c}  Delete failed: {e}"));
+                }
+            }
+        });
     }
 
     // Wire Send button
