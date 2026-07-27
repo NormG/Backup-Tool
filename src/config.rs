@@ -55,6 +55,7 @@ impl Default for Config {
                 ".extras/".to_string(),
                 "lost+found/".to_string(),
                 ".gvfs/".to_string(),
+                ".cargo/".to_string(),
                 "*~".to_string(),
             ],
             retention_days: 30,
