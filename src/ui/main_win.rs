@@ -50,6 +50,10 @@ pub fn show(app: &gtk4::Application, config: Config) {
     let log_page = build_log();
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
+    // ── Tab 6 — About ─────────────────────────────────────────────────────────
+    let about_page = build_about();
+    nb.append_page(&about_page, Some(&Label::new(Some("About"))));
+
     // Refresh the dashboard status label whenever the dashboard tab is shown.
     nb.connect_switch_page(glib::clone!(
         #[weak]
@@ -786,6 +790,97 @@ fn load_log(tv: &TextView) {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+// ── About tab ──────────────────────────────────────────────────────────────────
+
+fn build_about() -> GBox {
+    let b = tab_box();
+
+    // App name + icon row
+    let header_row = GBox::new(Orientation::Horizontal, 16);
+    header_row.set_margin_bottom(8);
+
+    // Icon
+    let icon = gtk4::Image::from_icon_name("home-backup");
+    icon.set_pixel_size(64);
+    icon.set_valign(Align::Start);
+    header_row.append(&icon);
+
+    // Title + version stacked vertically
+    let title_col = GBox::new(Orientation::Vertical, 4);
+    title_col.append(
+        &Label::builder()
+            .label("Home Backup")
+            .css_classes(vec!["title-1"])
+            .halign(Align::Start)
+            .build(),
+    );
+    title_col.append(
+        &Label::builder()
+            .label(concat!("Version ", env!("CARGO_PKG_VERSION")))
+            .halign(Align::Start)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+    title_col.append(
+        &Label::builder()
+            .label("GTK4 home-directory backup manager for Fedora Linux")
+            .halign(Align::Start)
+            .wrap(true)
+            .build(),
+    );
+    header_row.append(&title_col);
+    b.append(&header_row);
+
+    b.append(&gtk4::Separator::new(Orientation::Horizontal));
+
+    // Details grid
+    let details = [
+        ("License",     "GPL-3.0-or-later"),
+        ("Source",      "github.com/NormG/Backup-Tool"),
+        ("Backup tool", "rsync (atomic hardlinked snapshots)"),
+        ("Scheduler",   "systemd user timer — no root required"),
+        ("Config",      "~/.config/home-backup/config.toml"),
+        ("Log",         "~/.local/share/home-backup/backup.log"),
+    ];
+
+    for (key, val) in &details {
+        let row = GBox::new(Orientation::Horizontal, 12);
+        row.set_margin_top(4);
+        row.append(
+            &Label::builder()
+                .label(*key)
+                .halign(Align::Start)
+                .width_chars(14)
+                .css_classes(vec!["heading"])
+                .build(),
+        );
+        row.append(
+            &Label::builder()
+                .label(*val)
+                .halign(Align::Start)
+                .selectable(true)
+                .wrap(true)
+                .hexpand(true)
+                .build(),
+        );
+        b.append(&row);
+    }
+
+    b.append(&gtk4::Separator::new(Orientation::Horizontal));
+
+    // Copyright
+    b.append(
+        &Label::builder()
+            .label("Copyright \u{00a9} 2026 norm.  Distributed under the GNU General Public License v3.")
+            .halign(Align::Start)
+            .wrap(true)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+
+    b
+}
 
 // ── Clock conversion helpers ─────────────────────────────────────────────────
 
