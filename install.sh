@@ -45,6 +45,19 @@ step()   { printf "${_B}  -->  ${_X}%s\n" "$*"; }
 ok()     { printf "${_G}  ✓  ${_X}%s\n"  "$*"; }
 warn()   { printf "${_Y}  ⚠  ${_X}%s\n"  "$*"; }
 
+# ── Real-user context (sudo-safe) ─────────────────────────────────────────
+# When the script runs as root via sudo, user-specific files (config, icons,
+# desktop db, systemctl --user) must be written as the real user, not root.
+if [[ "${EUID:-$(id -u)}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    REAL_USER="${SUDO_USER}"
+    REAL_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+    RUN_AS="runuser -u ${SUDO_USER} --"
+else
+    REAL_USER="${USER:-$(id -un)}"
+    REAL_HOME="${HOME}"
+    RUN_AS=""
+fi
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 COMMAND="install"
 SYSTEM_INSTALL=false
@@ -78,16 +91,17 @@ fi
 INSTALLED_BIN="${INSTALL_BIN}/${BINARY_NAME}"
 BUILT_BIN="${SCRIPT_DIR}/target/release/${BINARY_NAME}"
 
-DESKTOP_DEST="${HOME}/.local/share/applications/${BINARY_NAME}.desktop"
-ICON_DIR_128="${HOME}/.local/share/icons/hicolor/128x128/apps"
-ICON_DIR_SVG="${HOME}/.local/share/icons/hicolor/scalable/apps"
+# All user-specific paths use REAL_HOME so sudo installs write to the right user.
+DESKTOP_DEST="${REAL_HOME}/.local/share/applications/${BINARY_NAME}.desktop"
+ICON_DIR_128="${REAL_HOME}/.local/share/icons/hicolor/128x128/apps"
+ICON_DIR_SVG="${REAL_HOME}/.local/share/icons/hicolor/scalable/apps"
 ICON_DEST_PNG="${ICON_DIR_128}/${BINARY_NAME}.png"
 ICON_DEST_SVG_FILE="${ICON_DIR_SVG}/${BINARY_NAME}.svg"
-SYSTEMD_DIR="${HOME}/.config/systemd/user"
+SYSTEMD_DIR="${REAL_HOME}/.config/systemd/user"
 SERVICE_FILE="${SYSTEMD_DIR}/${BINARY_NAME}.service"
 TIMER_FILE="${SYSTEMD_DIR}/${BINARY_NAME}.timer"
-CONFIG_FILE="${HOME}/.config/${BINARY_NAME}/config.toml"
-LOG_FILE="${HOME}/.local/share/${BINARY_NAME}/backup.log"
+CONFIG_FILE="${REAL_HOME}/.config/${BINARY_NAME}/config.toml"
+LOG_FILE="${REAL_HOME}/.local/share/${BINARY_NAME}/backup.log"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STATUS
@@ -133,6 +147,26 @@ cmd_status() {
 cmd_uninstall() {
     blue "Home Backup — Uninstall"
     echo
+
+    # Refuse to run from inside a snapshot or the backup destination.
+    # Deleting a snapshot tree from within it corrupts the hardlink graph
+    # that other snapshots depend on.
+    local _cwd
+    _cwd="$(pwd -P 2>/dev/null || pwd)"
+    if [[ "${_cwd}" =~ /(full|inc|\.inprogress)-[0-9] ]]; then
+        die "Current directory looks like a backup snapshot (${_cwd}).\n\
+       cd to your home directory before running uninstall."
+    fi
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        local _dest
+        _dest=$(grep -m1 '^dest_dir' "${CONFIG_FILE}" 2>/dev/null \
+                | sed 's/.*= *"\(.*\)"/\1/')
+        if [[ -n "${_dest}" && "${_cwd}" == "${_dest}"* ]]; then
+            die "Current directory is inside the backup destination (${_dest}).\n\
+       cd to your home directory before running uninstall."
+        fi
+    fi
+
     if ! $YES; then
         echo "  The following will be removed:"
         echo "    • ${INSTALLED_BIN}"
