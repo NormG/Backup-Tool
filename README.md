@@ -45,66 +45,61 @@ hardlinked so they consume no extra disk space.
 
 ## Installation
 
-### Option A — RPM (recommended for Fedora)
+> **Multi-user design:** the binary installs to `/usr/bin/home-backup` so it
+> is available to every user on the machine.  The systemd timer and config
+> are per-user and are created by the first-run wizard.
+
+### Option A — Install from GitHub release (simplest)
+
+Download and install the pre-built RPM directly — no build tools needed:
+
+```bash
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.7/home-backup-0.1.7-1.fc44.x86_64.rpm
+home-backup
+```
+
+### Option B — Build RPM from source
+
+Required when the pre-built RPM is not available for your Fedora release,
+or when you want to compile from the latest source.
 
 ```bash
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
-./package-rpm.sh                          # build the .rpm (~3 min first run)
+rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
 sudo dnf install ~/rpmbuild/RPMS/x86_64/home-backup-0.1.7-1.fc44.x86_64.rpm
-home-backup                               # launch wizard
+home-backup
 ```
 
-The RPM installs the binary to `/usr/bin/home-backup`, the desktop
-launcher, icon, and assets.  The systemd timer and config are created
-by the first-run wizard, not by the RPM, so run the app to complete setup.
+> **Always use `rm -rf vendor` before building a release RPM.**
+> The `--no-vendor` flag reuses a cached Cargo build tree and can produce
+> a binary compiled from stale source.  A clean build guarantees the RPM
+> contains exactly what is in the repository.
 
-To rebuild for a newer version without re-vendoring dependencies:
+Build requirements: `cargo`, `gtk4-devel`, `pkgconf-pkg-config`,
+`rpm-build`, `rpmdevtools`.
+
+### Uninstall
+
 ```bash
-./package-rpm.sh --no-vendor
+sudo dnf remove home-backup
 ```
 
-### Option B — User install (no root)
+See the full [Uninstall](#uninstall) section for notes on the systemd timer.
 
-```bash
-git clone https://github.com/NormG/Backup-Tool
-cd Backup-Tool
-./install.sh
-```
-
-The script:
-1. Checks all dependencies (`rsync`, `cargo`, `gtk4-devel`)
-2. Compiles a stripped release binary with `cargo build --release`
-3. Installs the binary to `~/.local/bin/home-backup`
-4. Installs the icon (128×128 PNG + SVG) to `~/.local/share/icons/hicolor/`
-5. Installs `home-backup.desktop` to `~/.local/share/applications/`
-6. Refreshes the icon and desktop databases
-
-The **systemd timer is configured during the first-run wizard**, not by
-`install.sh`, so no backup is scheduled until you run the app.
-
-### Options
+### Options for `install.sh` (alternative, no RPM)
 
 ```
 ./install.sh [options] [command]
 
 Commands:
-  install     Build and install (default)
+  install     Build and install to /usr/local/bin (default, requires sudo)
   uninstall   Remove all files; disable timer (prompts for confirmation)
   status      Show what is installed and whether the timer is active
 
 Options:
-  --system      Install to /usr/local/bin instead of ~/.local/bin (needs sudo)
-  --skip-build  Use an existing target/release/home-backup binary; skip compile
+  --skip-build  Use an existing target/release/home-backup binary
   --yes         Skip the uninstall confirmation prompt
-```
-
-### PATH
-
-If `~/.local/bin` is not in your `$PATH`, add this to `~/.bashrc`:
-
-```bash
-export PATH="${HOME}/.local/bin:${PATH}"
 ```
 
 ---
@@ -131,7 +126,7 @@ window opens.
 
 ## Main Window
 
-The manager has five tabs:
+The manager has six tabs:
 
 ### Dashboard
 - Current config summary with live drive-label detection
@@ -160,6 +155,12 @@ The manager has five tabs:
 ### Log
 - Shows the content of `~/.local/share/home-backup/backup.log`
 - **Reload** refreshes the view
+
+### About
+- Application name, version, and description
+- License, GitHub repository URL
+- Backup engine, scheduler, config and log paths
+- Copyright
 
 ---
 
