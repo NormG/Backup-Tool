@@ -327,12 +327,22 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
 
     let adj_h = gtk4::Adjustment::new(f64::from(stored_h), 0.0, 23.0, 1.0, 1.0, 0.0);
     let hour_spin = SpinButton::new(Some(&adj_h), 1.0, 0);
-    hour_spin.set_width_chars(3);
+    hour_spin.set_width_chars(2);
+    hour_spin.set_alignment(1.0); // right-justify digits
+    hour_spin.connect_output(|s| {
+        s.set_text(&format!("{:02}", s.value() as u32));
+        glib::Propagation::Stop
+    });
     time_row.append(&hour_spin);
     time_row.append(&Label::new(Some(":")));
     let adj_m = gtk4::Adjustment::new(f64::from(stored_m), 0.0, 59.0, 1.0, 5.0, 0.0);
     let min_spin = SpinButton::new(Some(&adj_m), 1.0, 0);
-    min_spin.set_width_chars(3);
+    min_spin.set_width_chars(2);
+    min_spin.set_alignment(1.0);
+    min_spin.connect_output(|s| {
+        s.set_text(&format!("{:02}", s.value() as u32));
+        glib::Propagation::Stop
+    });
     time_row.append(&min_spin);
 
     // 24h suffix / AM-PM picker (mutually exclusive)
@@ -343,7 +353,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     ampm_combo_time.set_active(Some(if stored_h >= 12 { 1 } else { 0 }));
     ampm_combo_time.set_visible(false);
 
-    let fmt_btn = Button::with_label("12h");
+    let fmt_btn = Button::with_label("Use 12 hr");
     time_row.append(&suffix_lbl);
     time_row.append(&ampm_combo_time);
     time_row.append(&fmt_btn);
@@ -365,7 +375,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
                 hour_spin.set_value(f64::from(h12));
                 suffix_lbl.set_visible(false);
                 ampm_combo_time.set_visible(true);
-                btn.set_label("24h");
+                btn.set_label("Use 24 hr");
                 *is_24h_time.borrow_mut() = false;
             } else {
                 // Switch to 24h
@@ -376,7 +386,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
                 hour_spin.set_value(f64::from(h24));
                 suffix_lbl.set_visible(true);
                 ampm_combo_time.set_visible(false);
-                btn.set_label("12h");
+                btn.set_label("Use 12 hr");
                 *is_24h_time.borrow_mut() = true;
             }
         });
