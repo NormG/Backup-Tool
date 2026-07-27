@@ -55,8 +55,8 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     };
     if effective_kind == BackupKind::Skip {
         let msg = format!(
-            "Backup skipped — last snapshot is within the {}-day incremental period.",
-            config.incremental_every_n_days
+            "Backup skipped (incremental period {n}d — last snapshot is recent enough).",
+            n = config.incremental_every_n_days
         );
         return Ok(msg);
     }
@@ -245,16 +245,25 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
 
     // Check whether the incremental period has elapsed since the last snapshot.
     // Snapshot names: {full,inc}-YYYY-MM-DD_HHmmss
+    //
+    // NOTE: the guard applies to ALL periods including 1.  With period=1 this
+    // means "at most one incremental per calendar day", which prevents both
+    // duplicate snapshots from multiple same-day manual invocations and a
+    // timestamp-collision rename failure when two runs happen in the same second.
     let period = config.incremental_every_n_days.max(1);
-    if period > 1 {
-        if let Some(latest) = resolve_latest(dest_root) {
-            let name = latest
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            // Date starts at index 5 (after "full-" or "inc-")
-            if let Some(date_str) = name.get(5..15) {
+    if let Some(latest) = resolve_latest(dest_root) {
+        let name = latest
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        // Snapshot names: "full-YYYY-MM-DD_HHmmss" or "inc-YYYY-MM-DD_HHmmss".
+        // "full-" is 5 chars; "inc-" is 4 chars.  Find the first '-' to locate
+        // the date regardless of prefix length.
+        if let Some(prefix_end) = name.find('-') {
+            let date_start = prefix_end + 1;
+            let date_end   = date_start + 10; // "YYYY-MM-DD" is always 10 chars
+            if let Some(date_str) = name.get(date_start..date_end) {
                 if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                     let today_date = Local::now().date_naive();
                     let days_since = (today_date - date).num_days();
@@ -265,7 +274,6 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
             }
         }
     }
-
     BackupKind::Incremental
 }
 
