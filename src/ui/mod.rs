@@ -15,25 +15,17 @@ pub fn run_app(config: Option<Config>) {
         .build();
 
     app.connect_activate(move |app| {
-        // Hidden root window that anchors the app lifetime.
-        let root = gtk4::ApplicationWindow::builder()
-            .application(app)
-            .default_width(0)
-            .default_height(0)
-            .visible(false)
-            .build();
-
         match &config {
             Some(cfg) if cfg.installed => {
                 // Already installed: open the manager directly.
                 main_win::show(app, cfg.clone());
             }
             _ => {
-                // First run: show the wizard.  When it completes, open the
-                // manager in the same process instance.
-                let app = app.clone();
-                install::show(&root, move |completed_cfg| {
-                    main_win::show(&app, completed_cfg);
+                // First run: the wizard window registers itself as an
+                // ApplicationWindow so the app exits cleanly when it is closed.
+                let app_clone = app.clone();
+                install::show(app, move |completed_cfg| {
+                    main_win::show(&app_clone, completed_cfg);
                 });
             }
         }

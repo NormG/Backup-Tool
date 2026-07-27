@@ -1,9 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gtk4::{
-    glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, DropDown, Entry, FileChooserAction,
-    FileChooserDialog, Frame, Label, Orientation, ResponseType, ScrolledWindow, SpinButton, Stack,
-    StringList, TextView, Window, WrapMode,
+    glib, prelude::*, Align, ApplicationWindow, Box as GBox, Button, ComboBoxText, DropDown,
+    Entry, FileChooserAction, FileChooserDialog, Frame, Label, Orientation, ResponseType,
+    ScrolledWindow, SpinButton, Stack, StringList, TextView, WrapMode,
 };
 
 use crate::{config::Config, drives, systemd};
@@ -12,17 +12,18 @@ use crate::{config::Config, drives, systemd};
 
 /// Build and show the first-run install wizard.
 ///
-/// `on_done` is called with the completed, saved Config when the install
-/// succeeds so the caller can tear down the wizard and open the main window.
-pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
+/// The wizard registers itself as an `ApplicationWindow` so the GTK
+/// application exits cleanly when the user closes it.  `on_done` is called
+/// with the completed config; the caller is responsible for opening the main
+/// management window before or instead of the wizard window closing.
+pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
     let cfg = Rc::new(RefCell::new(Config::default()));
 
-    let win = gtk4::Window::builder()
-        .transient_for(parent)
+    let win = ApplicationWindow::builder()
+        .application(app)
         .title("Home Backup — Setup")
         .default_width(640)
         .default_height(520)
-        .modal(true)
         .resizable(false)
         .build();
 
@@ -262,10 +263,13 @@ pub fn show<F: Fn(Config) + 'static>(parent: &impl IsA<Window>, on_done: F) {
                     return;
                 }
                 6 => {
-                    // done page → open main window
+                    // done page → open main window.
+                    // Call on_done FIRST so the main ApplicationWindow is
+                    // registered before this wizard window closes; without
+                    // that ordering the GTK app would exit in the gap.
                     let c = cfg.borrow().clone();
-                    win.close();
                     on_done_rc(c);
+                    win.close();
                     return;
                 }
                 _ => {}
@@ -677,7 +681,7 @@ fn build_review_text(cfg: &Config) -> String {
 fn do_install(
     cfg: &Rc<RefCell<Config>>,
     done_lbl: &Label,
-    win: &gtk4::Window,
+    win: &impl IsA<gtk4::Window>,
     _on_done_rc: &Rc<dyn Fn(Config)>,
     stack: &Stack,
     current_page: &Rc<RefCell<usize>>,
@@ -756,7 +760,7 @@ if the\n\
     stack.set_visible_child_name(pages[6]);
 }
 
-fn show_error(win: &gtk4::Window, msg: &str) {
+fn show_error(win: &impl IsA<gtk4::Window>, msg: &str) {
     let dlg = gtk4::MessageDialog::builder()
         .transient_for(win)
         .modal(true)

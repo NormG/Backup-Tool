@@ -5,10 +5,10 @@ use std::{
 };
 
 use gtk4::{
-    glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, Frame, Label, Notebook,
-    Orientation, ScrolledWindow, SpinButton, Switch, TextView, WrapMode,
+    glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, FileChooserAction,
+    FileChooserDialog, Frame, Label, Notebook, Orientation, ResponseType, ScrolledWindow,
+    SpinButton, Switch, TextView, WrapMode,
 };
-
 use crate::{backup, config::Config, systemd};
 
 // ── Entry-point ───────────────────────────────────────────────────────────────
@@ -39,7 +39,11 @@ pub fn show(app: &gtk4::Application, config: Config) {
     let excl_page = build_excludes(Rc::clone(&cfg));
     nb.append_page(&excl_page, Some(&Label::new(Some("Excludes"))));
 
-    // ── Tab 4 — Log ───────────────────────────────────────────────────────
+    // ── Tab 4 — Settings (source / destination) ──────────────────────────────
+    let settings_page = build_settings(Rc::clone(&cfg));
+    nb.append_page(&settings_page, Some(&Label::new(Some("Settings"))));
+
+    // ── Tab 5 — Log ───────────────────────────────────────────────────────────
     let log_page = build_log();
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
@@ -478,6 +482,125 @@ fn build_excludes(cfg: Rc<RefCell<Config>>) -> GBox {
         });
     }
 
+    b
+}
+
+// ── Settings tab (source & destination) ───────────────────────────────────────
+
+fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
+    let b = tab_box();
+
+    b.append(
+        &Label::builder()
+            .label("Source & Destination")
+            .css_classes(vec!["title-2"])
+            .halign(Align::Start)
+            .build(),
+    );
+    b.append(&field_label(
+        "Changes take effect on the next backup.  The drive UUID is preserved; \
+         if you change the destination path make sure it is reachable.",
+    ));
+
+    // ── Source directory ────────────────────────────────────────────────
+    b.append(&field_label("Back up from (source directory):"));
+    let src_row = GBox::new(Orientation::Horizontal, 8);
+    let src_entry = gtk4::Entry::builder()
+        .text(&cfg.borrow().source_dir)
+        .hexpand(true)
+        .build();
+    let src_browse = Button::with_label("Browse…");
+    {
+        let src_entry = src_entry.clone();
+        src_browse.connect_clicked(move |btn| {
+            let chooser = FileChooserDialog::builder()
+                .title("Choose source directory")
+                .action(FileChooserAction::SelectFolder)
+                .build();
+            chooser.add_button("Cancel", ResponseType::Cancel);
+            chooser.add_button("Select", ResponseType::Accept);
+            let src_entry = src_entry.clone();
+            chooser.connect_response(move |dlg, resp| {
+                if resp == ResponseType::Accept {
+                    if let Some(f) = dlg.file().and_then(|f| f.path()) {
+                        src_entry.set_text(&f.to_string_lossy());
+                    }
+                }
+                dlg.close();
+            });
+            if let Some(w) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
+                chooser.set_transient_for(Some(&w));
+            }
+            chooser.present();
+        });
+    }
+    src_row.append(&src_entry);
+    src_row.append(&src_browse);
+    b.append(&src_row);
+
+    // ── Destination directory ─────────────────────────────────────────────
+    b.append(&field_label("Backup destination path (on backup drive):"));
+    let dest_entry = gtk4::Entry::builder()
+        .text(&cfg.borrow().dest_dir)
+        .hexpand(true)
+        .build();
+    b.append(&dest_entry);
+
+    // Drive info (read-only)
+    let drive_info = format!(
+        "Drive label: {}   UUID: {}",
+        cfg.borrow().drive_label.as_deref().unwrap_or("(not set)"),
+        cfg.borrow().drive_uuid.as_deref().unwrap_or("(not set)"),
+    );
+    b.append(
+        &Label::builder()
+            .label(&drive_info)
+            .halign(Align::Start)
+            .wrap(true)
+            .css_classes(vec!["dim-label"])
+            .build(),
+    );
+
+    // ── Save ─────────────────────────────────────────────────────────────
+    let save_btn = Button::builder()
+        .label("Save")
+        .css_classes(vec!["suggested-action"])
+        .halign(Align::End)
+        .margin_top(16)
+        .build();
+    let save_lbl = Label::builder().halign(Align::Start).build();
+    {
+        let cfg = Rc::clone(&cfg);
+        let save_lbl = save_lbl.clone();
+        save_btn.connect_clicked(move |_| {
+            let new_src  = src_entry.text().to_string();
+            let new_dest = dest_entry.text().to_string();
+
+            // Refuse same-device configurations.
+            if crate::drives::is_same_device(
+                std::path::Path::new(&new_src),
+                std::path::Path::new(&new_dest),
+            ) {
+                save_lbl.set_text(
+                    "❌  Source and destination are on the same filesystem.  \
+                     Choose a different drive.",
+                );
+                return;
+            }
+
+            {
+                let mut c = cfg.borrow_mut();
+                c.source_dir = new_src;
+                c.dest_dir   = new_dest;
+            }
+            match cfg.borrow().save() {
+                Ok(()) => save_lbl.set_text("✅  Paths saved."),
+                Err(e) => save_lbl.set_text(&format!("❌  {e}")),
+            }
+        });
+    }
+    b.append(&save_btn);
+    b.append(&save_lbl);
     b
 }
 
