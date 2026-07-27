@@ -943,8 +943,15 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .build();
     b.append(&del_btn);
 
-    // ── Populate and wire ────────────────────────────────────────────────
-    btrfs_populate_list(&list_box, &snap_entry.text(), &source_base);
+    // ── Populate and wire ────────────────────────────────────────────
+    // Use the actual Btrfs subvolume base (e.g. "home") not source_base
+    // (e.g. "norm") so existing snapshots are visible on first open.
+    let init_base = btrfs_find_subvol(&source)
+        .as_deref()
+        .and_then(|s| std::path::Path::new(s).file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source_base.clone());
+    btrfs_populate_list(&list_box, &snap_entry.text(), &init_base);
 
     // List selection → update instructions + enable delete
     {
@@ -1065,15 +1072,24 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         ));
     }
 
-    // Refresh list
+    // Refresh list — use the actual Btrfs subvolume base (e.g. "home") as
+    // the prefix, not source_base (e.g. "norm"), because snapshots are named
+    // after the subvolume that was snapshotted, not the source directory.
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
-        let source_base_ref = source_base.clone();
+        let source_for_refresh = source.clone();
         refresh_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
-            move |_| btrfs_populate_list(&list_box, &snap_entry.text(), &source_base_ref)
+            move |_| {
+                let actual_base = btrfs_find_subvol(&source_for_refresh)
+                    .as_deref()
+                    .and_then(|s| std::path::Path::new(s).file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                btrfs_populate_list(&list_box, &snap_entry.text(), &actual_base);
+            }
         ));
     }
 
