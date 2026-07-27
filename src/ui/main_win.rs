@@ -975,12 +975,23 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         ));
     }
 
+    // Shared references to the Phase-2 combos so create/delete can refresh them.
+    // The actual ComboBoxText widgets are created below; we store them here
+    // using Rc<RefCell<Option<...>>> so the create/delete closures can borrow
+    // them after they are initialized.
+    let snap_combo_ref: std::rc::Rc<std::cell::RefCell<Option<ComboBoxText>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let parent_combo_ref: std::rc::Rc<std::cell::RefCell<Option<ComboBoxText>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
     // Create snapshot
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
         let create_lbl = create_lbl.clone();
         let source = source.clone();
+        let snap_combo_ref = snap_combo_ref.clone();
+        let parent_combo_ref = parent_combo_ref.clone();
         create_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
@@ -1053,6 +1064,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                         create_lbl
                             .set_text(&format!("✅  Snapshot created: {snap_name}{user_note}"));
                         btrfs_populate_list(&list_box, &snap_dir, &actual_base);
+                        // Refresh the Phase-2 dropdowns so the new snapshot appears.
+                        if let (Some(sc), Some(pc)) = (
+                            snap_combo_ref.borrow().as_ref().cloned(),
+                            parent_combo_ref.borrow().as_ref().cloned(),
+                        ) {
+                            btrfs_populate_combos(&sc, &pc, &snap_dir, "");
+                        }
                     }
                     Ok(o) => {
                         let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
@@ -1085,6 +1103,8 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
+        let snap_combo_ref = snap_combo_ref.clone();
+        let parent_combo_ref = parent_combo_ref.clone();
         del_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
@@ -1113,6 +1133,13 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                         Ok(o) if o.status.success() => {
                             btrfs_populate_list(&list_box, &snap_entry.text(), "");
                             btn.set_sensitive(false);
+                            // Refresh combos after delete too.
+                            if let (Some(sc), Some(pc)) = (
+                                snap_combo_ref.borrow().as_ref().cloned(),
+                                parent_combo_ref.borrow().as_ref().cloned(),
+                            ) {
+                                btrfs_populate_combos(&sc, &pc, &snap_entry.text(), "");
+                            }
                         }
                         Ok(o) => eprintln!("btrfs delete: {}", String::from_utf8_lossy(&o.stderr)),
                         Err(e) => eprintln!("btrfs not found: {e}"),
@@ -1172,6 +1199,10 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     selrow.append(&refresh_send_btn);
     b.append(&field_label("Snapshot to send  |  Parent (incremental):"));
     b.append(&selrow);
+
+    // Store references so create/delete handlers can refresh the combos.
+    *snap_combo_ref.borrow_mut() = Some(snap_combo.clone());
+    *parent_combo_ref.borrow_mut() = Some(parent_combo.clone());
 
     // Populate combos — use empty prefix to show all snapshots (same as Refresh).
     btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), "");
