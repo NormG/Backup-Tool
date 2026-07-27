@@ -913,10 +913,17 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     list_frame.set_child(Some(&list_sw));
     b.append(&list_frame);
 
-    // ── Recovery instructions ──────────────────────────────────────────
-    b.append(&field_label(
-        "Recovery instructions (select a snapshot above):",
-    ));
+    // ── Delete button ─────────────────────────────────────────────────
+    let del_btn = Button::builder()
+        .label("Delete Selected Snapshot")
+        .css_classes(vec!["destructive-action"])
+        .halign(Align::End)
+        .sensitive(false)
+        .build();
+    b.append(&del_btn);
+
+    // instr_tv is built here but appended AFTER Phase 2 (Send to Drive)
+    // so all recovery/restore instructions appear together at the bottom.
     let instr_tv = TextView::builder()
         .monospace(true)
         .editable(false)
@@ -926,22 +933,12 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         .buffer()
         .set_text("Select a snapshot from the list above to see recovery instructions.");
     let instr_sw = ScrolledWindow::builder()
-        .vexpand(true)
-        .min_content_height(160)
+        .vexpand(false)
+        .min_content_height(120)
         .build();
     instr_sw.set_child(Some(&instr_tv));
     let instr_frame = Frame::new(None);
     instr_frame.set_child(Some(&instr_sw));
-    b.append(&instr_frame);
-
-    // ── Delete button ─────────────────────────────────────────────────
-    let del_btn = Button::builder()
-        .label("Delete Selected Snapshot")
-        .css_classes(vec!["destructive-action"])
-        .halign(Align::End)
-        .sensitive(false)
-        .build();
-    b.append(&del_btn);
 
     // ── Populate and wire ────────────────────────────────────────────
     // Use the actual Btrfs subvolume base (e.g. "home") not source_base
@@ -1176,8 +1173,8 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     b.append(&field_label("Snapshot to send  |  Parent (incremental):"));
     b.append(&selrow);
 
-    // Populate combos from existing snapshots
-    btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), &source_base);
+    // Populate combos — use empty prefix to show all snapshots (same as Refresh).
+    btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), "");
 
     // Send button
     let send_row = GBox::new(Orientation::Horizontal, 8);
@@ -1227,16 +1224,23 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     recv_frame.set_child(Some(&recv_sw));
     b.append(&recv_frame);
 
-    // Wire refresh combos button
+    // Wire refresh combos button — empty prefix shows all snapshots.
     {
         let snap_combo = snap_combo.clone();
         let parent_combo = parent_combo.clone();
         let snap_entry = snap_entry.clone();
-        let source_base = source_base.clone();
         refresh_send_btn.connect_clicked(move |_| {
-            btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), &source_base);
+            btrfs_populate_combos(&snap_combo, &parent_combo, &snap_entry.text(), "");
         });
     }
+
+    // ── Recovery instructions (Phase 1 local snapshots) ────────────────────
+    // Placed after Phase 2 so all recovery content is together at the bottom.
+    b.append(&gtk4::Separator::new(Orientation::Horizontal));
+    b.append(&field_label(
+        "Local snapshot recovery (select a snapshot from the list above):",
+    ));
+    b.append(&instr_frame);
 
     // Wire send_list selection → receive instructions
     {
