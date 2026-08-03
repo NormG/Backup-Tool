@@ -100,6 +100,29 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 mkdir -p /home/.snapshots 2>/dev/null || :
 chmod 1777 /home/.snapshots 2>/dev/null || :
 
+# Drop legacy home-backup user systemd units after the 0.1.7 rename.
+migrate_home_backup_user_units() {
+    local user="$1"
+    local home
+    home=$(getent passwd "$user" | cut -d: -f6) || return 0
+    [ -n "$home" ] || return 0
+    [ -d "$home" ] || return 0
+
+    local ud="$home/.config/systemd/user"
+    if [ -f "$ud/home-backup.timer" ] || [ -f "$ud/home-backup.service" ]; then
+        runuser -u "$user" -- systemctl --user disable --now home-backup.timer \
+            &>/dev/null || true
+        rm -f "$ud/home-backup.service" "$ud/home-backup.timer"
+        runuser -u "$user" -- systemctl --user daemon-reload &>/dev/null || true
+    fi
+
+    rm -f "$home/.local/share/applications/home-backup.desktop"
+}
+
+if [ -n "${SUDO_USER:-}" ]; then
+    migrate_home_backup_user_units "$SUDO_USER"
+fi
+
 %postun
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
@@ -119,6 +142,7 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 * Sun Aug  2 2026 norm <norm@localhost> - 0.1.7-1
 - Rename package and binary from home-backup to backup-tool
 - Add missing 128x128 PNG app icon; align docs, install.sh, and spec
+- RPM post-install: remove legacy home-backup user timer/service units
 
 * Sun Jul 27 2026 norm <norm@localhost> - 0.1.6-1
 - BTRFS tab: Refresh and Delete buttons for sent archives list

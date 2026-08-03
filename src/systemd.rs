@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::{path::PathBuf, process::Command};
+use std::{path::{Path, PathBuf}, process::Command};
 
 use crate::config::Config;
 
@@ -46,49 +46,11 @@ pub fn install(config: &Config) -> Result<String> {
     let sd_dir = systemd_user_dir();
     std::fs::create_dir_all(&sd_dir).with_context(|| format!("creating {}", sd_dir.display()))?;
 
-    // ── Service ───────────────────────────────────────────────────────────
-    let svc = format!(
-        "[Unit]\n\
-         Description=Home Directory Backup\n\
-         Documentation=file://{data_dir}/backup.log\n\
-         After=default.target\n\
-         \n\
-         [Service]\n\
-         Type=oneshot\n\
-         ExecStart={bin} --backup auto\n\
-         SyslogIdentifier={app}\n\
-         StandardOutput=journal\n\
-         StandardError=journal\n\
-         TimeoutStopSec=3600\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n",
-        data_dir = Config::data_dir().display(),
-        bin = bin,
-        app = APP_ID,
-    );
-    let svc_path = sd_dir.join(SERVICE);
-    std::fs::write(&svc_path, &svc).with_context(|| format!("writing {}", svc_path.display()))?;
-    log.push(format!("  Wrote {}", svc_path.display()));
+    write_service_unit(&sd_dir, &bin)?;
+    log.push(format!("  Wrote {}", sd_dir.join(SERVICE).display()));
 
-    // ── Timer ─────────────────────────────────────────────────────────────
-    let timer = format!(
-        "[Unit]\n\
-         Description=Daily Home Backup Timer\n\
-         \n\
-         [Timer]\n\
-         OnCalendar=*-*-* {h:02}:{m:02}:00\n\
-         AccuracySec=1min\n\
-         RandomizedDelaySec=300\n\
-         Persistent=true\n\
-         \n\
-         [Install]\n\
-         WantedBy=timers.target\n",
-    );
-    let timer_path = sd_dir.join(TIMER);
-    std::fs::write(&timer_path, &timer)
-        .with_context(|| format!("writing {}", timer_path.display()))?;
-    log.push(format!("  Wrote {}", timer_path.display()));
+    write_timer_unit(&sd_dir, h, m)?;
+    log.push(format!("  Wrote {}", sd_dir.join(TIMER).display()));
 
     // ── Reload & enable ───────────────────────────────────────────────────
     run_systemctl(&["daemon-reload"])?;
@@ -111,24 +73,15 @@ pub fn install(config: &Config) -> Result<String> {
 
 /// Regenerate and reload the timer unit after a schedule change.
 pub fn update_timer(config: &Config) -> Result<()> {
+    let bin = current_exe()?;
     let (h, m) = config.backup_hm();
     let sd_dir = systemd_user_dir();
-    let timer = format!(
-        "[Unit]\n\
-         Description=Daily Home Backup Timer\n\
-         \n\
-         [Timer]\n\
-         OnCalendar=*-*-* {h:02}:{m:02}:00\n\
-         AccuracySec=1min\n\
-         RandomizedDelaySec=300\n\
-         Persistent=true\n\
-         \n\
-         [Install]\n\
-         WantedBy=timers.target\n",
-    );
-    std::fs::write(sd_dir.join(TIMER), &timer)?;
+    std::fs::create_dir_all(&sd_dir).with_context(|| format!("creating {}", sd_dir.display()))?;
+
+    write_service_unit(&sd_dir, &bin)?;
+    write_timer_unit(&sd_dir, h, m)?;
     run_systemctl(&["daemon-reload"])?;
-    run_systemctl(&["restart", TIMER])?;
+    run_systemctl(&["enable", "--now", TIMER])?;
     Ok(())
 }
 
@@ -171,6 +124,52 @@ pub fn timer_status_line() -> String {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
+    let svc = format!(
+        "[Unit]\n\
+         Description=Home Directory Backup\n\
+         Documentation=file://{data_dir}/backup.log\n\
+         After=default.target\n\
+         \n\
+         [Service]\n\
+         Type=oneshot\n\
+         ExecStart={bin} --backup auto\n\
+         SyslogIdentifier={app}\n\
+         StandardOutput=journal\n\
+         StandardError=journal\n\
+         TimeoutStopSec=3600\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        data_dir = Config::data_dir().display(),
+        bin = bin,
+        app = APP_ID,
+    );
+    let svc_path = sd_dir.join(SERVICE);
+    std::fs::write(&svc_path, &svc).with_context(|| format!("writing {}", svc_path.display()))?;
+    Ok(())
+}
+
+fn write_timer_unit(sd_dir: &Path, h: u8, m: u8) -> Result<()> {
+    let timer = format!(
+        "[Unit]\n\
+         Description=Daily Backup-Tool Timer\n\
+         \n\
+         [Timer]\n\
+         OnCalendar=*-*-* {h:02}:{m:02}:00\n\
+         AccuracySec=1min\n\
+         RandomizedDelaySec=300\n\
+         Persistent=true\n\
+         \n\
+         [Install]\n\
+         WantedBy=timers.target\n",
+    );
+    let timer_path = sd_dir.join(TIMER);
+    std::fs::write(&timer_path, &timer)
+        .with_context(|| format!("writing {}", timer_path.display()))?;
+    Ok(())
+}
 
 fn run_systemctl(args: &[&str]) -> Result<()> {
     let mut full_args = vec!["--user"];
@@ -281,7 +280,7 @@ fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {
 
     let desktop_content = format!(
         "[Desktop Entry]\n\
-         Name=Home Backup\n\
+         Name=Backup-Tool\n\
          Comment=Manage home-directory rsync backups\n\
          Exec={bin}\n\
          Icon=backup-tool\n\

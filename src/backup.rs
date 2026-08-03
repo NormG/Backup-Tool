@@ -170,7 +170,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 10. Desktop notification (best-effort) ─────────────────────────────
     let _ = notify(
-        "Home Backup",
+        "Backup-Tool",
         &format!("{prefix} snapshot created successfully"),
     );
 

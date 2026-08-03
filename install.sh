@@ -118,7 +118,7 @@ LOG_FILE="${REAL_HOME}/.local/share/${BINARY_NAME}/backup.log"
 # STATUS
 # ─────────────────────────────────────────────────────────────────────────────
 cmd_status() {
-    blue "Home Backup — Installation Status"
+    blue "Backup-Tool — Installation Status"
     echo
     _cf() { [[ -e "$2" ]] && ok "$1: $2" || warn "$1: not found ($2)"; }
     _cf "Binary       " "${INSTALLED_BIN}"
@@ -156,7 +156,7 @@ cmd_status() {
 # UNINSTALL
 # ─────────────────────────────────────────────────────────────────────────────
 cmd_uninstall() {
-    blue "Home Backup — Uninstall"
+    blue "Backup-Tool — Uninstall"
     echo
 
     # Refuse to run from inside a snapshot or the backup destination.
@@ -217,7 +217,7 @@ cmd_uninstall() {
 # INSTALL
 # ─────────────────────────────────────────────────────────────────────────────
 cmd_install() {
-    blue "Home Backup v${APP_VERSION} — Install"
+    blue "Backup-Tool v${APP_VERSION} — Install"
     echo
 
     # ── Dependency checks ────────────────────────────────────────────────

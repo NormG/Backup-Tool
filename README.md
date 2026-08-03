@@ -1,4 +1,4 @@
-# Home Backup
+# Backup-Tool
 
 A GTK4 desktop application for Fedora Linux that backs up your home directory to
 an external drive using **rsync atomic snapshots** and a **systemd user timer**.

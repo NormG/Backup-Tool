@@ -85,14 +85,27 @@ impl Config {
         Self::data_dir().join("backup.log")
     }
 
+    /// Legacy config path from before the home-backup → backup-tool rename.
+    fn legacy_config_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from(".config"))
+            .join("home-backup")
+            .join("config.toml")
+    }
+
     /// Load config from disk, returning `None` if the file does not yet exist.
     pub fn load() -> Result<Option<Self>> {
         let path = Self::config_path();
-        if !path.exists() {
+        let legacy = Self::legacy_config_path();
+        let read_path = if path.exists() {
+            path
+        } else if legacy.exists() {
+            legacy
+        } else {
             return Ok(None);
-        }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading config {}", path.display()))?;
+        };
+        let raw = std::fs::read_to_string(&read_path)
+            .with_context(|| format!("reading config {}", read_path.display()))?;
         let cfg: Self = toml::from_str(&raw).with_context(|| "parsing config.toml")?;
         Ok(Some(cfg))
     }

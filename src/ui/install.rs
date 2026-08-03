@@ -21,7 +21,7 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
 
     let win = ApplicationWindow::builder()
         .application(app)
-        .title("Home Backup — Setup")
+        .title("Backup-Tool — Setup")
         .default_width(640)
         .default_height(520)
         .resizable(false)
@@ -38,7 +38,7 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
     header.set_margin_bottom(8);
 
     let title_lbl = Label::builder()
-        .label("Home Backup Setup")
+        .label("Backup-Tool Setup")
         .css_classes(vec!["title-1"])
         .halign(Align::Start)
         .hexpand(true)
@@ -357,7 +357,7 @@ fn build_welcome() -> GBox {
     let b = page_box();
     b.append(
         &Label::builder()
-            .label("Welcome to Home Backup")
+            .label("Welcome to Backup-Tool")
             .css_classes(vec!["title-2"])
             .halign(Align::Start)
             .build(),

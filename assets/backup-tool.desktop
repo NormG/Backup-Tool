@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Home Backup
+Name=Backup-Tool
 GenericName=Backup Manager
 Comment=Manage home-directory rsync backups to an external drive
 Exec=@EXEC@

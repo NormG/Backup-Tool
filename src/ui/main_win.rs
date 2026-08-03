@@ -19,7 +19,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
 
     let win = gtk4::ApplicationWindow::builder()
         .application(app)
-        .title("Home Backup Manager")
+        .title("Backup-Tool")
         .default_width(720)
         .default_height(460)
         .build();
@@ -1880,7 +1880,7 @@ fn build_about() -> GBox {
     let title_col = GBox::new(Orientation::Vertical, 4);
     title_col.append(
         &Label::builder()
-            .label("Home Backup")
+            .label("Backup-Tool")
             .css_classes(vec!["title-1"])
             .halign(Align::Start)
             .build(),
