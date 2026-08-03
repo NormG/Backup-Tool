@@ -3,7 +3,7 @@
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
 Version:        0.1.7
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
 License:        GPL-3.0-or-later
@@ -62,10 +62,13 @@ CARGO_EOF
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 %build
+# Keep artifacts under the source tree (rpmbuild and CI may set CARGO_TARGET_DIR).
+export CARGO_TARGET_DIR=%{_builddir}/%{name}-%{version}-build/%{name}-%{version}/target
 cargo build --release --offline
 
 # ── Install ───────────────────────────────────────────────────────────────────
 %install
+export CARGO_TARGET_DIR=%{_builddir}/%{name}-%{version}-build/%{name}-%{version}/target
 # Binary
 install -Dm 0755 target/release/%{name} \
     %{buildroot}%{_bindir}/%{name}
@@ -139,6 +142,10 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sun Aug  2 2026 norm <norm@localhost> - 0.1.7-2
+- Fix RPM build when CARGO_TARGET_DIR is set externally
+- Ensure schedule reload writes service and timer units
+
 * Sun Aug  2 2026 norm <norm@localhost> - 0.1.7-1
 - Rename package and binary from home-backup to backup-tool
 - Add missing 128x128 PNG app icon; align docs, install.sh, and spec
