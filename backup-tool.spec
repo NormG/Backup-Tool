@@ -63,14 +63,14 @@ CARGO_EOF
 # ── Build ─────────────────────────────────────────────────────────────────────
 %build
 # Keep artifacts under the source tree (rpmbuild and CI may set CARGO_TARGET_DIR).
-export CARGO_TARGET_DIR=%{_builddir}/%{name}-%{version}-build/%{name}-%{version}/target
+export CARGO_TARGET_DIR=$PWD/target
 cargo build --release --offline
 
 # ── Install ───────────────────────────────────────────────────────────────────
 %install
-export CARGO_TARGET_DIR=%{_builddir}/%{name}-%{version}-build/%{name}-%{version}/target
+export CARGO_TARGET_DIR=$PWD/target
 # Binary
-install -Dm 0755 target/release/%{name} \
+install -Dm 0755 "$CARGO_TARGET_DIR/release/%{name}" \
     %{buildroot}%{_bindir}/%{name}
 
 # Icons
