@@ -53,7 +53,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .vexpand(true)
         .build();
     btrfs_page.set_child(Some(&build_btrfs_tab(Rc::clone(&cfg))));
-    nb.append_page(&btrfs_page, Some(&Label::new(Some("Btrfs"))));
+    nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
 
     // About is always last (rightmost).
     let about_page = build_about();
@@ -579,7 +579,7 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
 
     b.append(
         &Label::builder()
-            .label("Source & Destination")
+            .label("Paths")
             .css_classes(vec!["title-2"])
             .halign(Align::Start)
             .build(),
@@ -1871,7 +1871,7 @@ fn build_about() -> GBox {
     header_row.set_margin_bottom(8);
 
     // Icon
-    let icon = gtk4::Image::from_icon_name("home-backup");
+    let icon = gtk4::Image::from_icon_name("backup-tool");
     icon.set_pixel_size(64);
     icon.set_valign(Align::Start);
     header_row.append(&icon);
@@ -1910,8 +1910,8 @@ fn build_about() -> GBox {
         ("Source", "github.com/NormG/Backup-Tool"),
         ("Backup tool", "rsync (atomic hardlinked snapshots)"),
         ("Scheduler", "systemd user timer — no root required"),
-        ("Config", "~/.config/home-backup/config.toml"),
-        ("Log", "~/.local/share/home-backup/backup.log"),
+        ("Config", "~/.config/backup-tool/config.toml"),
+        ("Log", "~/.local/share/backup-tool/backup.log"),
     ];
 
     for (key, val) in &details {

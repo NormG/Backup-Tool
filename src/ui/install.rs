@@ -762,11 +762,11 @@ fn build_review_text(cfg: &Config) -> String {
          Retention         : {} days\n\
          Excludes          : {} patterns\n\n\
          What will be installed:\n\
-         • ~/.config/systemd/user/home-backup.service\n\
-         • ~/.config/systemd/user/home-backup.timer  (OnCalendar=*-*-* {})\n\
-         • ~/.local/share/applications/home-backup.desktop\n\
-         • ~/.local/share/icons/hicolor/128x128/apps/home-backup.png\n\
-         • ~/.config/home-backup/config.toml",
+         • ~/.config/systemd/user/backup-tool.service\n\
+         • ~/.config/systemd/user/backup-tool.timer  (OnCalendar=*-*-* {})\n\
+         • ~/.local/share/applications/backup-tool.desktop\n\
+         • ~/.local/share/icons/hicolor/128x128/apps/backup-tool.png\n\
+         • ~/.config/backup-tool/config.toml",
         cfg.source_dir,
         cfg.dest_dir,
         cfg.drive_uuid.as_deref().unwrap_or("(none)"),

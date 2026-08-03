@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
-# package-rpm.sh — Build an RPM package for home-backup
+# package-rpm.sh — Build an RPM package for backup-tool
 #
 # Usage:
 #   ./package-rpm.sh            # full build (vendors deps + compiles)
 #   ./package-rpm.sh --no-vendor  # skip cargo vendor (vendor dir must exist)
 #
-# Output: ~/rpmbuild/RPMS/x86_64/home-backup-*.rpm
-#         ~/rpmbuild/SRPMS/home-backup-*.src.rpm
+# Output: ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
+#         ~/rpmbuild/SRPMS/backup-tool-*.src.rpm
 # =============================================================================
 set -euo pipefail
 
-NAME="home-backup"
+NAME="backup-tool"
 VERSION="0.1.7"
 RELEASE="1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

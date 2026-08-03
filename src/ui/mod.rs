@@ -11,7 +11,7 @@ use crate::config::Config;
 /// immediately.  Otherwise the first-run install wizard is shown.
 pub fn run_app(config: Option<Config>) {
     let app = gtk4::Application::builder()
-        .application_id("com.normsplace.home-backup")
+        .application_id("com.normsplace.backup-tool")
         .build();
 
     app.connect_activate(move |app| {

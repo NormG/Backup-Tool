@@ -23,7 +23,7 @@ hardlinked so they consume no extra disk space.
   defaults exclude caches, trash, disc images, and browser data
 - **Systemd user timer** — fully user-level (no root, no cron); survives reboots
   and can be toggled from the GUI
-- **CLI headless mode** — `home-backup --backup auto` is what systemd calls;
+- **CLI headless mode** — `backup-tool --backup auto` is what systemd calls;
   can also be invoked manually for scripting
 - **Desktop integration** — `.desktop` launcher and icon installed to standard
   XDG paths; appears in GNOME Activities / application launchers
@@ -45,7 +45,7 @@ hardlinked so they consume no extra disk space.
 
 ## Installation
 
-> **Multi-user design:** the binary installs to `/usr/bin/home-backup` so it
+> **Multi-user design:** the binary installs to `/usr/bin/backup-tool` so it
 > is available to every user on the machine.  The systemd timer and config
 > are per-user and are created by the first-run wizard.
 
@@ -54,8 +54,8 @@ hardlinked so they consume no extra disk space.
 Download and install the pre-built RPM directly — no build tools needed:
 
 ```bash
-sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.7/home-backup-0.1.7-1.fc44.x86_64.rpm
-home-backup
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.7/backup-tool-0.1.7-1.fc44.x86_64.rpm
+backup-tool
 ```
 
 ### Option B — Build RPM from source
@@ -67,8 +67,8 @@ or when you want to compile from the latest source.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
-sudo dnf install ~/rpmbuild/RPMS/x86_64/home-backup-0.1.7-1.fc44.x86_64.rpm
-home-backup
+sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.7-1.fc44.x86_64.rpm
+backup-tool
 ```
 
 > **Always use `rm -rf vendor` before building a release RPM.**
@@ -82,7 +82,7 @@ Build requirements: `cargo`, `gtk4-devel`, `pkgconf-pkg-config`,
 ### Uninstall
 
 ```bash
-sudo dnf remove home-backup
+sudo dnf remove backup-tool
 ```
 
 See the full [Uninstall](#uninstall) section for notes on the systemd timer.
@@ -98,7 +98,9 @@ Commands:
   status      Show what is installed and whether the timer is active
 
 Options:
-  --skip-build  Use an existing target/release/home-backup binary
+  --user        Install to ~/.local/bin for the current user only
+  --system      Install to /usr/local/bin (default, requires sudo)
+  --skip-build  Use an existing target/release/backup-tool binary
   --yes         Skip the uninstall confirmation prompt
 ```
 
@@ -153,7 +155,7 @@ The manager has seven tabs:
 - Same-filesystem guard prevents saving an unsafe configuration
 
 ### Log
-- Shows the content of `~/.local/share/home-backup/backup.log`
+- Shows the content of `~/.local/share/backup-tool/backup.log`
 - **Reload** refreshes the view
 
 ### About
@@ -182,9 +184,9 @@ Requires `btrfs-progs`: `sudo dnf install btrfs-progs`
 The same binary is called by systemd when the timer fires:
 
 ```bash
-home-backup --backup auto         # full on configured day, incremental otherwise
-home-backup --backup full         # force a full snapshot
-home-backup --backup incremental  # force an incremental snapshot
+backup-tool --backup auto         # full on configured day, incremental otherwise
+backup-tool --backup full         # force a full snapshot
+backup-tool --backup incremental  # force an incremental snapshot
 ```
 
 Exit codes follow standard UNIX conventions (0 = success, non-zero = error).
@@ -194,7 +196,7 @@ rsync exit code 24 (files vanished during transfer) is treated as non-fatal.
 
 ## Configuration
 
-Config file: `~/.config/home-backup/config.toml`
+Config file: `~/.config/backup-tool/config.toml`
 
 ```toml
 source_dir       = "/home/norm"
@@ -265,10 +267,10 @@ share disk blocks with the full (or previous incremental) they were derived from
 
 Installed to `~/.config/systemd/user/`:
 
-**`home-backup.service`** — runs `home-backup --backup auto`; type `oneshot`
+**`backup-tool.service`** — runs `backup-tool --backup auto`; type `oneshot`
 with a 1-hour stop timeout so large backups are not killed mid-run.
 
-**`home-backup.timer`** — fires daily at the configured time; `Persistent=true`
+**`backup-tool.timer`** — fires daily at the configured time; `Persistent=true`
 so a missed backup (e.g. machine was off) runs immediately on the next boot.
 `RandomizedDelaySec=300` staggers the start by up to 5 minutes to avoid
 constant contention if multiple machines back up to the same drive.
@@ -277,20 +279,20 @@ Useful commands:
 
 ```bash
 # Status and scheduling
-systemctl --user status home-backup.timer
-systemctl --user list-timers home-backup.timer
-journalctl --user -u home-backup.service --since today
+systemctl --user status backup-tool.timer
+systemctl --user list-timers backup-tool.timer
+journalctl --user -u backup-tool.service --since today
 
 # Manually trigger a backup
-systemctl --user start home-backup.service
+systemctl --user start backup-tool.service
 
 # Stop a running backup (e.g. to cancel a test run)
-systemctl --user stop home-backup.service
-systemctl --user reset-failed home-backup.service   # clear the failed state
+systemctl --user stop backup-tool.service
+systemctl --user reset-failed backup-tool.service   # clear the failed state
 
 # Disable / re-enable the scheduled timer
-systemctl --user disable --now home-backup.timer
-systemctl --user enable  --now home-backup.timer
+systemctl --user disable --now backup-tool.timer
+systemctl --user enable  --now backup-tool.timer
 ```
 
 > **Note:** If you stop a running backup manually, the `.inprogress-*`
@@ -307,16 +309,16 @@ systemctl --user enable  --now home-backup.timer
 ### RPM install
 
 ```bash
-sudo dnf remove home-backup
+sudo dnf remove backup-tool
 ```
 
 This removes the system binary, launcher, and icons.  The user-level
-systemd timer (`~/.config/systemd/user/home-backup.timer`) is **not**
+systemd timer (`~/.config/systemd/user/backup-tool.timer`) is **not**
 removed by `dnf` — it lives in your home directory and will continue to
 fire.  Disable it manually after removing the RPM:
 
 ```bash
-systemctl --user disable --now home-backup.timer
+systemctl --user disable --now backup-tool.timer
 ```
 
 ### User install (`install.sh`)
@@ -332,7 +334,7 @@ This disables the timer, removes the binary, launcher, icons, and assets.
 To also remove the config:
 
 ```bash
-rm -rf ~/.config/home-backup
+rm -rf ~/.config/backup-tool
 ```
 
 ---
@@ -346,16 +348,16 @@ cargo fmt            # format all source files
 cargo build --release   # optimised stripped binary
 
 # Run the GUI directly from the build directory:
-./target/debug/home-backup
+./target/debug/backup-tool
 
 # Test the backup engine without the GUI (needs a config file):
-./target/debug/home-backup --backup full
+./target/debug/backup-tool --backup full
 ```
 
 ### Project Layout
 
 ```
-home-backup2/
+Backup-Tool/
 ├── src/
 │   ├── main.rs          Entry point; CLI argument dispatch
 │   ├── config.rs        Config struct, XDG load/save
@@ -365,11 +367,13 @@ home-backup2/
 │   └── ui/
 │       ├── mod.rs        GTK Application bootstrap
 │       ├── install.rs    First-run setup wizard (7-page Stack)
-│       └── main_win.rs   Management window (5-tab Notebook)
+│       └── main_win.rs   Management window (7-tab Notebook)
 ├── assets/
-│   ├── home-backup.png   128×128 app icon
-│   ├── home-backup.svg   Scalable app icon
-│   └── home-backup.desktop  Launcher template (@EXEC@ substituted on install)
+│   ├── backup-tool.png   128×128 app icon
+│   ├── backup-tool.svg   Scalable app icon
+│   └── backup-tool.desktop  Launcher template (@EXEC@ substituted on install)
+├── backup-tool.spec     RPM spec file
+├── package-rpm.sh       Build script for Fedora RPM packages
 ├── install.sh           Build / install / uninstall / status script
 ├── Cargo.toml
 └── README.md
@@ -379,4 +383,4 @@ home-backup2/
 
 ## License
 
-GPL-3.0
+GPL-3.0-or-later

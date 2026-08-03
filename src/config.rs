@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Application configuration stored under `$XDG_CONFIG_HOME/home-backup/config.toml`.
+/// Application configuration stored under `$XDG_CONFIG_HOME/backup-tool/config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Absolute path of the directory to back up.
@@ -70,7 +70,7 @@ impl Config {
     pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from(".config"))
-            .join("home-backup")
+            .join("backup-tool")
             .join("config.toml")
     }
 
@@ -78,7 +78,7 @@ impl Config {
     pub fn data_dir() -> PathBuf {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from(".local/share"))
-            .join("home-backup")
+            .join("backup-tool")
     }
 
     pub fn log_path() -> PathBuf {

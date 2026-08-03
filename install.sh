@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
 # =============================================================================
-# install.sh — Build, install, verify, and uninstall home-backup
+# install.sh — Build, install, verify, and uninstall backup-tool
 #
 # Usage:
 #   ./install.sh [options] [command]
 #
 # Commands (default: install):
-#   install     Build and install to ~/.local/bin  (default)
+#   install     Build and install to /usr/local/bin (default, requires sudo)
 #   uninstall   Remove all installed files and disable the systemd timer
 #   status      Show what is currently installed and timer state
 #
 # Options:
-#   --system      Install to /usr/local/bin instead of ~/.local/bin (needs sudo)
+#   --user        Install to ~/.local/bin for the current user only
+#   --system      Install to /usr/local/bin (same as default; needs sudo)
 #   --skip-build  Skip cargo build; use an already-compiled release binary
 #   --yes         Skip confirmation prompt during uninstall
 #   -h, --help    Show this help
 #
 # Examples:
-#   ./install.sh                   # user install, auto-build
-#   ./install.sh --skip-build      # user install, binary already built
-#   ./install.sh --system          # system-wide (sudo required)
+#   ./install.sh                   # system-wide install, auto-build
+#   ./install.sh --user            # user install to ~/.local/bin
+#   ./install.sh --skip-build      # system-wide, binary already built
 #   ./install.sh uninstall         # remove everything (prompts for confirmation)
 #   ./install.sh uninstall --yes   # remove everything, no prompt
 #   ./install.sh status            # show what is installed
 # =============================================================================
 set -euo pipefail
 
-BINARY_NAME="home-backup"
-APP_VERSION="0.1.0"
+BINARY_NAME="backup-tool"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_VERSION="$(grep -m1 '^version' "${SCRIPT_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -61,6 +62,8 @@ fi
 # ── Argument parsing ──────────────────────────────────────────────────────────
 COMMAND="install"
 SYSTEM_INSTALL=false
+USER_INSTALL_FLAG=false
+USER_INSTALL_ENV="${USER_INSTALL:-false}"
 SKIP_BUILD=false
 YES=false
 
@@ -68,6 +71,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         install|uninstall|status) COMMAND="$1" ;;
         --system)      SYSTEM_INSTALL=true ;;
+        --user)        USER_INSTALL_FLAG=true ;;
         --skip-build)  SKIP_BUILD=true ;;
         --yes|-y)      YES=true ;;
         --help|-h)
@@ -80,14 +84,14 @@ done
 
 # Default to system-wide install so the binary is available to all users.
 # Pass --user to install only for the current user instead.
-if $SYSTEM_INSTALL; then
-    INSTALL_BIN="/usr/local/bin"
-    INSTALL_ASSETS="/usr/local/share/${BINARY_NAME}"
-    NEED_SUDO=true
-elif [[ "${USER_INSTALL:-false}" == "true" ]]; then
+if $USER_INSTALL_FLAG || [[ "${USER_INSTALL_ENV}" == "true" ]]; then
     INSTALL_BIN="${REAL_HOME}/.local/bin"
     INSTALL_ASSETS="${REAL_HOME}/.local/share/${BINARY_NAME}"
     NEED_SUDO=false
+elif $SYSTEM_INSTALL; then
+    INSTALL_BIN="/usr/local/bin"
+    INSTALL_ASSETS="/usr/local/share/${BINARY_NAME}"
+    NEED_SUDO=true
 else
     # System-wide default (requires sudo)
     INSTALL_BIN="/usr/local/bin"

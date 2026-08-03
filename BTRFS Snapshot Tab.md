@@ -5,7 +5,7 @@ Add an optional tab to the management window that enables BTRFS subvolume snapsh
 At startup and whenever the source path changes, call `findmnt -n -o FSTYPE --target <source_dir>` to read the filesystem type.  The result is cached in a new `source_fstype: Option<String>` field on the `Config` struct (not persisted; refreshed on load).  If the value is `"btrfs"` the tab is fully interactive; for all other types it is insensitive and shows a dim label: *"BTRFS snapshots are only available when the source directory is on a BTRFS filesystem."*
 ## Snapshot layout
 Snapshots are stored as read-only BTRFS subvolumes alongside the rsync destination.  Default location: a `.btrfs-snapshots` directory inside `dest_dir`, e.g.:
-```warp-runnable-command
+```bash
 /mnt/home_backups/verona1/.btrfs-snapshots/
   home-2026-07-27_020000/   ← read-only subvolume
   home-2026-07-27_141500/
@@ -13,7 +13,7 @@ Snapshots are stored as read-only BTRFS subvolumes alongside the rsync destinati
 The snapshot name is `<source_basename>-<timestamp>`.  The location is configurable in the tab.
 ## Snapshot creation
 Creating a snapshot calls:
-```warp-runnable-command
+```bash
 btrfs subvolume snapshot -r <source_dir> <snapshot_path>
 ```
 No root is required if the user owns the subvolume.  The command is run via `std::process::Command`; stdout/stderr are captured and shown in a result label.  A spinner or progress label indicates the operation is running (BTRFS snapshots are fast — typically under one second).
@@ -26,7 +26,7 @@ No root is required if the user owns the subvolume.  The command is run via `std
 * **Delete snapshot** button — calls `btrfs subvolume delete <path>`; prompts for confirmation.
 ## Recovery instructions text
 When a snapshot is selected, the instructions panel shows:
-```warp-runnable-command
+```bash
 To access this snapshot:
 
   1. Mount the BTRFS volume:
@@ -62,11 +62,11 @@ The device path is resolved via `findmnt -n -o SOURCE --target <snapshot_dir>`. 
 * Copyable receive command shown per selected archive
 * If `btrfs send` fails with permission denied, show the exact terminal command
 ## About tab pin
-About is always the rightmost tab.  In `show()` it is appended last, after BTRFS.
+About is always the rightmost tab.  In `show()` the BTRFS tab is appended before About so About stays last.
 ## Files to modify
 * `src/config.rs` — add `source_fstype: Option<String>` (transient, not serialised)
 * `src/drives.rs` — add `detect_fstype(path: &str) -> Option<String>` via `findmnt`
-* `src/ui/main_win.rs` — add `build_btrfs_tab()` function; append tab after About; detect fstype on startup
+* `src/ui/main_win.rs` — add `build_btrfs_tab()` function; append BTRFS tab before About; detect fstype on startup
 * `README.md` — document the BTRFS tab under Main Window
 ## Implementation notes
 * `btrfs` CLI must be present; check at tab-open time and show an error if missing (`sudo dnf install btrfs-progs`).

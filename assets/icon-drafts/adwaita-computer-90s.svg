@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 1990s desktop PC - GNOME Adwaita full-color app icon style -->
+  <!-- Palette: warm beige plastics, Adwaita blues, flat top + darker front profile -->
+
+  <!-- Monitor top surface -->
+  <rect x="8" y="7" width="40" height="28" rx="4" fill="#D8C8A8"/>
+  <!-- Monitor front profile (depth) -->
+  <rect x="8" y="31" width="40" height="5" rx="0" fill="#B8A078"/>
+  <rect x="8" y="33" width="40" height="3" rx="2" fill="#B8A078"/>
+
+  <!-- Screen bezel inset -->
+  <rect x="12" y="11" width="32" height="20" rx="2" fill="#8E8B82"/>
+  <!-- CRT screen -->
+  <rect x="14" y="13" width="28" height="16" rx="2" fill="#62A0EA"/>
+  <!-- Screen highlight -->
+  <rect x="14" y="13" width="28" height="8" rx="2" fill="#99C1F1" opacity="0.55"/>
+  <!-- Simple window chrome on screen -->
+  <rect x="16" y="15" width="24" height="3" rx="1" fill="#3584E4"/>
+  <rect x="16" y="20" width="16" height="2" rx="0.5" fill="#1C71D8" opacity="0.65"/>
+  <rect x="16" y="24" width="20" height="2" rx="0.5" fill="#1C71D8" opacity="0.45"/>
+
+  <!-- Monitor stand top -->
+  <rect x="26" y="36" width="12" height="4" rx="1.5" fill="#C9B992"/>
+  <!-- Stand front profile -->
+  <rect x="26" y="39" width="12" height="2" rx="0.5" fill="#A9956B"/>
+  <!-- Stand base -->
+  <rect x="20" y="41" width="24" height="4" rx="2" fill="#D8C8A8"/>
+  <rect x="20" y="44" width="24" height="2" rx="1" fill="#B8A078"/>
+
+  <!-- Tower top surface -->
+  <rect x="36" y="38" width="20" height="18" rx="3" fill="#D8C8A8"/>
+  <!-- Tower front profile -->
+  <rect x="36" y="53" width="20" height="4" rx="2" fill="#B8A078"/>
+
+  <!-- Floppy drive bay -->
+  <rect x="39" y="42" width="14" height="4" rx="1" fill="#8E8B82"/>
+  <rect x="40" y="43" width="12" height="2" rx="0.5" fill="#5E5C64"/>
+  <!-- Drive slot line -->
+  <rect x="41" y="44.5" width="10" height="0.8" rx="0.4" fill="#3D3846"/>
+
+  <!-- Power / HDD LEDs -->
+  <circle cx="41" cy="50" r="1.4" fill="#33D17A"/>
+  <circle cx="46" cy="50" r="1.4" fill="#E66100" opacity="0.85"/>
+
+  <!-- Front vent lines -->
+  <rect x="50" y="44" width="1.2" height="8" rx="0.6" fill="#A9956B" opacity="0.7"/>
+  <rect x="52.5" y="44" width="1.2" height="8" rx="0.6" fill="#A9956B" opacity="0.7"/>
+</svg>

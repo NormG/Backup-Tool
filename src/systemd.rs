@@ -5,9 +5,9 @@ use crate::config::Config;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const SERVICE: &str = "home-backup.service";
-const TIMER: &str = "home-backup.timer";
-const APP_ID: &str = "home-backup";
+const SERVICE: &str = "backup-tool.service";
+const TIMER: &str = "backup-tool.timer";
+const APP_ID: &str = "backup-tool";
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -193,7 +193,7 @@ fn current_exe() -> Result<String> {
 
 /// Add (or refresh) a Nautilus/Files sidebar bookmark for the backup destination.
 ///
-/// Strips any pre-existing `home-backup` entries first so re-installs don't
+/// Strips any pre-existing `backup-tool` entries first so re-installs don't
 /// accumulate stale bookmarks.
 fn manage_nautilus_bookmark(dest_dir: &str) -> Result<()> {
     let bookmarks_path = dirs::config_dir()
@@ -219,7 +219,7 @@ fn manage_nautilus_bookmark(dest_dir: &str) -> Result<()> {
         .lines()
         .filter(|l| {
             // Drop lines that look like a previously installed backup bookmark.
-            !l.contains("home_backups") && !l.contains("home-backup")
+            !l.contains("home_backups") && !l.contains("backup-tool")
         })
         .collect();
 
@@ -250,8 +250,8 @@ fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("/usr/local/bin"));
 
-    let icon_src = exe_dir.join("assets").join("home-backup.png");
-    let icon_dest = icon_dir.join("home-backup.png");
+    let icon_src = exe_dir.join("assets").join("backup-tool.png");
+    let icon_dest = icon_dir.join("backup-tool.png");
 
     if icon_src.exists() {
         std::fs::copy(&icon_src, &icon_dest)
@@ -284,14 +284,14 @@ fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {
          Name=Home Backup\n\
          Comment=Manage home-directory rsync backups\n\
          Exec={bin}\n\
-         Icon=home-backup\n\
+         Icon=backup-tool\n\
          Terminal=false\n\
          Type=Application\n\
          Categories=System;Utility;\n\
          Keywords=backup;rsync;snapshot;\n\
          StartupNotify=true\n",
     );
-    let desktop_path = apps_dir.join("home-backup.desktop");
+    let desktop_path = apps_dir.join("backup-tool.desktop");
     std::fs::write(&desktop_path, &desktop_content)
         .with_context(|| format!("writing {}", desktop_path.display()))?;
     log.push(format!("  Installed launcher → {}", desktop_path.display()));

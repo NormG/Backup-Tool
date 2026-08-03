@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     // ── Headless backup mode ───────────────────────────────────────────────
-    // Called by the systemd service: `home-backup --backup auto`
+    // Called by the systemd service: `backup-tool --backup auto`
     if let Some(pos) = args.iter().position(|a| a == "--backup") {
         let kind_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or("auto");
         let kind: BackupKind = kind_str

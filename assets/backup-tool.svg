@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 1990s PC + reel-to-reel deck, GNOME Adwaita app icon style -->
+
+  <!-- === Monitor (left) === -->
+  <rect x="9" y="10" width="26" height="16" rx="3" fill="#D8C8A8"/>
+  <rect x="9" y="23" width="26" height="3" rx="1" fill="#B8A078"/>
+  <rect x="12" y="13" width="20" height="11" rx="1.5" fill="#8E8B82"/>
+  <rect x="14" y="15" width="16" height="7" rx="1" fill="#62A0EA"/>
+  <rect x="14" y="15" width="16" height="3.5" rx="1" fill="#99C1F1" opacity="0.5"/>
+  <rect x="15.5" y="16.5" width="11" height="1.5" rx="0.4" fill="#3584E4"/>
+
+  <!-- Monitor stand -->
+  <rect x="19" y="26" width="8" height="3" rx="1.2" fill="#C9B992"/>
+  <rect x="19" y="28.5" width="8" height="1.5" rx="0.4" fill="#A9956B"/>
+  <rect x="15" y="30" width="16" height="3" rx="1.5" fill="#D8C8A8"/>
+  <rect x="15" y="32.5" width="16" height="1.5" rx="0.7" fill="#B8A078"/>
+
+  <!-- === Tower (right, taller than monitor) === -->
+  <rect x="37" y="4" width="18" height="34" rx="2.5" fill="#D8C8A8"/>
+  <rect x="37" y="35" width="18" height="4" rx="1.5" fill="#B8A078"/>
+
+  <rect x="40" y="9" width="12" height="3.5" rx="0.6" fill="#8E8B82"/>
+  <rect x="41" y="10" width="10" height="1.8" rx="0.4" fill="#5E5C64"/>
+  <rect x="42" y="10.8" width="8" height="0.7" rx="0.3" fill="#3D3846"/>
+
+  <circle cx="42" cy="18" r="1.2" fill="#33D17A"/>
+  <circle cx="47" cy="18" r="1.2" fill="#E66100" opacity="0.85"/>
+
+  <rect x="50" y="12" width="1.2" height="18" rx="0.6" fill="#A9956B" opacity="0.7"/>
+  <rect x="52" y="12" width="1.2" height="18" rx="0.6" fill="#A9956B" opacity="0.7"/>
+
+  <!-- === Reel-to-reel deck === -->
+  <!-- Deck surface (behind reels) -->
+  <rect x="10" y="44" width="44" height="12" rx="1" fill="#986A44"/>
+  <!-- Control panel front (width matches deck) -->
+  <rect x="10" y="56" width="44" height="6" rx="2" fill="#8E6749"/>
+  <rect x="10" y="62" width="44" height="2" rx="1" fill="#6B4A2E"/>
+
+  <!-- Left supply reel -->
+  <circle cx="19" cy="48.5" r="9" fill="#C0BFBC"/>
+  <circle cx="19" cy="48.5" r="7" fill="#A9956B"/>
+  <circle cx="19" cy="48.5" r="4.8" fill="#8E8B82"/>
+  <circle cx="19" cy="48.5" r="1.9" fill="#5E5C64"/>
+  <circle cx="19" cy="48.5" r="0.9" fill="#3D3846"/>
+
+  <!-- Right take-up reel -->
+  <circle cx="45" cy="48.5" r="9" fill="#C0BFBC"/>
+  <circle cx="45" cy="48.5" r="7" fill="#A9956B"/>
+  <circle cx="45" cy="48.5" r="4.8" fill="#8E8B82"/>
+  <circle cx="45" cy="48.5" r="1.9" fill="#5E5C64"/>
+  <circle cx="45" cy="48.5" r="0.9" fill="#3D3846"/>
+
+  <!-- Tape wound on right reel -->
+  <path d="M 45 39.5 A 9 9 0 0 1 54 48.5 A 9 9 0 0 1 45 57.5"
+        fill="#B8B7B4" opacity="0.4"/>
+
+  <!-- Tape: straight horizontal off each reel -->
+  <path d="M 22 57 L 28 57"
+        fill="none" stroke="#C0BFBC" stroke-width="1.15" stroke-linecap="round"/>
+  <path d="M 36 57 L 42 57"
+        fill="none" stroke="#C0BFBC" stroke-width="1.15" stroke-linecap="round"/>
+
+  <!-- Tape head: narrow, curved sides follow reel arcs; does not cover reels -->
+  <path d="M 26.4 53.7
+           A 9 9 0 0 1 25.4 54.9
+           L 38.6 54.9
+           A 9 9 0 0 1 37.6 53.7
+           Z"
+        fill="#5E5C64"/>
+  <!-- Front profile + lower lip (tape concealed between reels) -->
+  <path d="M 28 55.4 L 36 55.4 L 36 57 L 28 57 Z"
+        fill="#4A4946"/>
+
+  <!-- Red arrow: tower → centre of reel deck (angled) -->
+  <line x1="39.5" y1="36" x2="34.25" y2="45.1"
+        stroke="#E01B24" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="32,49 32.1,43.85 36.4,46.35" fill="#E01B24"/>
+
+  <!-- VU meter windows (on control panel) -->
+  <rect x="28" y="58" width="4" height="2.5" rx="0.4" fill="#2E3436"/>
+  <rect x="28.5" y="58.5" width="3" height="1.4" rx="0.2" fill="#33D17A" opacity="0.85"/>
+  <rect x="32" y="58" width="4" height="2.5" rx="0.4" fill="#2E3436"/>
+  <rect x="32.5" y="58.5" width="3" height="1.4" rx="0.2" fill="#F6D32D" opacity="0.85"/>
+
+  <!-- Transport buttons -->
+  <circle cx="14" cy="60.5" r="1.1" fill="#C0BFBC"/>
+  <circle cx="18" cy="60.5" r="1.1" fill="#C0BFBC"/>
+  <rect x="22" y="59.6" width="2" height="2" rx="0.4" fill="#C0BFBC"/>
+
+  <!-- Red REC LED (flashing) -->
+  <circle cx="48" cy="60.5" r="2.2" fill="#C01C28" opacity="0.35"/>
+  <circle cx="48" cy="60.5" r="1.5" fill="#E01B24">
+    <animate attributeName="opacity" values="1;0.2;1" dur="0.9s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="47.5" cy="60" r="0.5" fill="#FF8A80" opacity="0.8">
+    <animate attributeName="opacity" values="0.9;0;0.9" dur="0.9s" repeatCount="indefinite"/>
+  </circle>
+</svg>

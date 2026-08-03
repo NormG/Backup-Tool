@@ -1,7 +1,7 @@
 # TODO: Add GPG signing key once a key pair is generated.
-#   rpm --addsign ~/rpmbuild/RPMS/x86_64/home-backup-*.rpm
+#   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
-Name:           home-backup
+Name:           backup-tool
 Version:        0.1.7
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
@@ -36,8 +36,8 @@ systemd user timer.
 
 Features:
   - Guided 7-page install wizard with live drive detection
-  - Five-tab management window (Dashboard, Schedule, Excludes,
-    Source/Destination, Log)
+  - Seven-tab management window (Dashboard, Schedule, Excludes,
+    Paths, Log, BTRFS, About)
   - Atomic rsync snapshots staged in .inprogress-* and renamed on success
   - Hardlinked incrementals via --link-dest; only deltas consume new space
   - Configurable full/incremental schedule, retention, and exclude patterns
@@ -116,9 +116,19 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sun Aug  2 2026 norm <norm@localhost> - 0.1.7-1
+- Rename package and binary from home-backup to backup-tool
+- Add missing 128x128 PNG app icon; align docs, install.sh, and spec
+
+* Sun Jul 27 2026 norm <norm@localhost> - 0.1.6-1
+- BTRFS tab: Refresh and Delete buttons for sent archives list
+
+* Sun Jul 27 2026 norm <norm@localhost> - 0.1.5-1
+- BTRFS send/receive Phase 2; pkexec fallback for permission errors
+
 * Sun Jul 27 2026 norm <norm@localhost> - 0.1.4-1
 - RPM packaging introduced; package-rpm.sh build script added
-- Fix: Source/Destination tab now shows live-detected drive label
+- Fix: Paths tab now shows live-detected drive label
 - Docs: finalized README with RPM install, systemd commands, uninstall
 
 * Sun Jul 27 2026 norm <norm@localhost> - 0.1.3-1

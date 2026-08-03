@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 1990s DAT recorder alone - GNOME Adwaita app icon style -->
+
+  <!-- Main chassis top -->
+  <rect x="5" y="18" width="54" height="28" rx="3" fill="#6E6D6A"/>
+  <!-- Front profile -->
+  <rect x="5" y="43" width="54" height="7" rx="2" fill="#4A4946"/>
+
+  <!-- Handle bump (portable DAT deck) -->
+  <rect x="24" y="14" width="16" height="5" rx="2" fill="#5E5C64"/>
+  <rect x="26" y="15" width="12" height="3" rx="1" fill="#77767B"/>
+
+  <!-- Tape slot door -->
+  <rect x="10" y="22" width="44" height="12" rx="1.5" fill="#3D3846"/>
+  <rect x="11" y="23" width="42" height="10" rx="1" fill="#241F31"/>
+  <rect x="12" y="26" width="40" height="2" rx="0.5" fill="#5E5C64"/>
+
+  <!-- DAT label stripe -->
+  <rect x="12" y="24" width="14" height="2" rx="0.4" fill="#3584E4" opacity="0.75"/>
+
+  <!-- LCD display -->
+  <rect x="42" y="22" width="14" height="8" rx="1" fill="#2E3436"/>
+  <rect x="43" y="23.5" width="12" height="5" rx="0.6" fill="#F6D32D" opacity="0.85"/>
+  <rect x="44.5" y="25" width="2" height="2" rx="0.3" fill="#E5A50A"/>
+  <rect x="48" y="25" width="2" height="2" rx="0.3" fill="#E5A50A"/>
+  <rect x="51.5" y="25" width="2" height="2" rx="0.3" fill="#E5A50A"/>
+
+  <!-- Transport controls -->
+  <circle cx="12" cy="46" r="1.6" fill="#C0BFBC"/>
+  <circle cx="17" cy="46" r="1.6" fill="#C0BFBC"/>
+  <circle cx="22" cy="46" r="1.6" fill="#C0BFBC"/>
+  <rect x="26" y="44.5" width="3" height="3" rx="0.5" fill="#C0BFBC"/>
+
+  <!-- Power cable plugged in (rear right) -->
+  <path d="M 56 28 L 61 28 L 61 34 L 56 34 Z" fill="#4A4946"/>
+  <rect x="58" y="29" width="4.5" height="4" rx="0.5" fill="#77767B"/>
+  <rect x="60" y="30" width="3" height="2" rx="0.3" fill="#C0BFBC"/>
+  <!-- Mains lead -->
+  <path d="M 61 31 L 64 31" stroke="#77767B" stroke-width="1.8" stroke-linecap="round"/>
+
+  <!-- Red REC LED flashing -->
+  <circle cx="50" cy="46" r="3.2" fill="#C01C28" opacity="0.3"/>
+  <circle cx="50" cy="46" r="2.2" fill="#E01B24">
+    <animate attributeName="opacity" values="1;0.15;1" dur="0.85s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="49.2" cy="45.2" r="0.7" fill="#FF8A80">
+    <animate attributeName="opacity" values="0.85;0;0.85" dur="0.85s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Feet -->
+  <rect x="10" y="50" width="4" height="1.5" rx="0.5" fill="#3D3846"/>
+  <rect x="50" y="50" width="4" height="1.5" rx="0.5" fill="#3D3846"/>
+</svg>
