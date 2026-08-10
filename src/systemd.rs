@@ -134,7 +134,7 @@ fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
          \n\
          [Service]\n\
          Type=oneshot\n\
-         ExecStart={bin} --backup auto\n\
+         ExecStart={bin} backup auto\n\
          SyslogIdentifier={app}\n\
          StandardOutput=journal\n\
          StandardError=journal\n\

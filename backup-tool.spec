@@ -3,7 +3,7 @@
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
 Version:        0.1.7
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
 License:        GPL-3.0-or-later
@@ -37,7 +37,7 @@ systemd user timer.
 Features:
   - Guided 7-page install wizard with live drive detection
   - Seven-tab management window (Dashboard, Schedule, Excludes,
-    Paths, Log, BTRFS, About)
+    Paths, Log, Btrfs, About)
   - Atomic rsync snapshots staged in .inprogress-* and renamed on success
   - Hardlinked incrementals via --link-dest; only deltas consume new space
   - Configurable full/incremental schedule, retention, and exclude patterns

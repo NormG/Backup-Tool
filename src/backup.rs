@@ -61,6 +61,38 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         return Ok(msg);
     }
 
+    // ── 2b. Full backup: prune first, then verify there is room ───────────
+    let mut deferred_full = false;
+    let effective_kind = if effective_kind == BackupKind::Full {
+        match prepare_full_backup(config, &dest_root)? {
+            FullPrep::Proceed => BackupKind::Full,
+            FullPrep::DeferredToIncremental { available, needed } => {
+                deferred_full = true;
+                let msg = format!(
+                    "Full backup deferred ({} free, {} needed) — running incremental instead.",
+                    format_bytes(available),
+                    format_bytes(needed)
+                );
+                let log_path = Config::log_path();
+                if let Ok(mut log) = open_log_append(&log_path) {
+                    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+                    let _ = writeln!(log, "[{ts}] {msg}");
+                }
+                BackupKind::Incremental
+            }
+            FullPrep::Blocked { available, needed } => {
+                return Ok(format!(
+                    "Full backup deferred: need {} free but only {} available.\n\
+                     Old incrementals were pruned; remove old full-* snapshots or free space on the drive.",
+                    format_bytes(needed),
+                    format_bytes(available)
+                ));
+            }
+        }
+    } else {
+        effective_kind
+    };
+
     // ── 3. Prepare paths ──────────────────────────────────────────────────
     let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
     let prefix = match effective_kind {
@@ -76,13 +108,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 4. Open log file ───────────────────────────────────────────────────
     let log_path = Config::log_path();
-    if let Some(p) = log_path.parent() {
-        fs::create_dir_all(p)?;
-    }
-    let mut log_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
+    let mut log_file = open_log_append(&log_path)
         .with_context(|| format!("opening log {}", log_path.display()))?;
 
     let log_ts = Local::now().format("%Y-%m-%d %H:%M:%S");
@@ -175,11 +201,132 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     );
 
     // Build summary string for the GUI.
-    let summary = build_summary(prefix, &final_dir, &stdout);
+    let mut summary = build_summary(prefix, &final_dir, &stdout);
+    if deferred_full {
+        summary = format!(
+            "⚠️  Scheduled full backup deferred (insufficient space after pruning).\n\n{summary}"
+        );
+    }
     Ok(summary)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Safety margin applied when comparing free space to the latest snapshot size.
+const FULL_BACKUP_SPACE_MARGIN: f64 = 1.10;
+
+enum FullPrep {
+    Proceed,
+    DeferredToIncremental { available: u64, needed: u64 },
+    Blocked { available: u64, needed: u64 },
+}
+
+/// Before a full backup: prune old incrementals, then ensure the drive has
+/// enough free space for a complete copy (old snapshots remain during rsync).
+fn prepare_full_backup(config: &Config, dest_root: &Path) -> Result<FullPrep> {
+    let log_path = Config::log_path();
+    let mut log = open_log_append(&log_path)?;
+
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    writeln!(
+        log,
+        "[{ts}] Full backup scheduled — pruning incrementals older than {}d first",
+        config.retention_days
+    )?;
+    apply_retention(dest_root, config.retention_days, &mut log)?;
+
+    let available = drives::available_bytes(dest_root)?;
+    let needed = full_backup_bytes_needed(dest_root)?;
+
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    if available >= needed {
+        writeln!(
+            log,
+            "[{ts}] Space check passed: {} free, {} required",
+            format_bytes(available),
+            format_bytes(needed)
+        )?;
+        return Ok(FullPrep::Proceed);
+    }
+
+    writeln!(
+        log,
+        "[{ts}] Space check failed: {} free, {} required",
+        format_bytes(available),
+        format_bytes(needed)
+    )?;
+
+    if resolve_latest(dest_root).is_some() {
+        Ok(FullPrep::DeferredToIncremental { available, needed })
+    } else {
+        Ok(FullPrep::Blocked { available, needed })
+    }
+}
+
+/// Estimate bytes required for a new full snapshot, based on the latest
+/// snapshot size with a safety margin.  When no snapshot exists yet, require
+/// at least 1 GiB as a minimal sanity check.
+fn full_backup_bytes_needed(dest_root: &Path) -> Result<u64> {
+    if let Some(latest) = resolve_latest(dest_root) {
+        let bytes = dir_disk_usage_bytes(&latest)?;
+        Ok((bytes as f64 * FULL_BACKUP_SPACE_MARGIN).ceil() as u64)
+    } else {
+        Ok(1024 * 1024 * 1024)
+    }
+}
+
+fn dir_disk_usage_bytes(path: &Path) -> Result<u64> {
+    let out = Command::new("du")
+        .args(["-sb", "--"])
+        .arg(path)
+        .output()
+        .with_context(|| format!("running du on {}", path.display()))?;
+
+    if !out.status.success() {
+        bail!(
+            "du failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    let field = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .context("parsing du output")?
+        .to_string();
+
+    field
+        .parse::<u64>()
+        .with_context(|| format!("parsing du bytes '{field}'"))
+}
+
+fn open_log_append(log_path: &Path) -> Result<fs::File> {
+    if let Some(p) = log_path.parent() {
+        fs::create_dir_all(p)?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("opening log {}", log_path.display()))
+}
+
+fn format_bytes(n: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    let n = n as f64;
+    if n >= GIB {
+        format!("{:.1} GiB", n / GIB)
+    } else if n >= MIB {
+        format!("{:.1} MiB", n / MIB)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n / KIB)
+    } else {
+        format!("{n:.0} B")
+    }
+}
 
 /// Ensure the backup destination is accessible, trying auto-mount when
 /// needed.  Returns the resolved `PathBuf`.

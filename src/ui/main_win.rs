@@ -44,7 +44,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
     let log_page = build_log();
     nb.append_page(&log_page, Some(&Label::new(Some("Log"))));
 
-    // BTRFS before About so About is always the rightmost tab.
+    // Btrfs before About so About is always the rightmost tab.
     // Wrap in a ScrolledWindow so the window can be resized smaller than the
     // tab's natural height without clipping content.
     let btrfs_page = ScrolledWindow::builder()
@@ -53,7 +53,7 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .vexpand(true)
         .build();
     btrfs_page.set_child(Some(&build_btrfs_tab(Rc::clone(&cfg))));
-    nb.append_page(&btrfs_page, Some(&Label::new(Some("BTRFS"))));
+    nb.append_page(&btrfs_page, Some(&Label::new(Some("Btrfs"))));
 
     // About is always last (rightmost).
     let about_page = build_about();
@@ -796,7 +796,7 @@ fn load_log(tv: &TextView) {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-// ── BTRFS Snapshot tab ───────────────────────────────────────────────────────────
+// ── Btrfs Snapshot tab ───────────────────────────────────────────────────────────
 
 fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     let b = tab_box();
@@ -901,26 +901,24 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     let spacer = Label::builder().hexpand(true).build();
     list_header.append(&spacer);
     let refresh_btn = Button::with_label("↺ Refresh");
+    let del_btn = Button::builder()
+        .label("Delete Snapshot(s)")
+        .css_classes(vec!["destructive-action"])
+        .tooltip_text("Delete the selected snapshot(s) from disk")
+        .sensitive(false)
+        .build();
     list_header.append(&refresh_btn);
+    list_header.append(&del_btn);
     b.append(&list_header);
 
     let list_box = ListBox::builder()
-        .selection_mode(SelectionMode::Single)
+        .selection_mode(SelectionMode::Multiple)
         .build();
     let list_sw = ScrolledWindow::builder().min_content_height(130).build();
     let list_frame = Frame::new(None);
     list_sw.set_child(Some(&list_box));
     list_frame.set_child(Some(&list_sw));
     b.append(&list_frame);
-
-    // ── Delete button ─────────────────────────────────────────────────
-    let del_btn = Button::builder()
-        .label("Delete Selected Snapshot")
-        .css_classes(vec!["destructive-action"])
-        .halign(Align::End)
-        .sensitive(false)
-        .build();
-    b.append(&del_btn);
 
     // instr_tv is built here but appended AFTER Phase 2 (Send to Drive)
     // so all recovery/restore instructions appear together at the bottom.
@@ -960,16 +958,23 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
             instr_tv,
             #[weak]
             del_btn,
+            #[weak]
+            list_box,
             move |_, row| {
+                let selected = btrfs_selected_snapshots(&list_box);
+                del_btn.set_sensitive(!selected.is_empty());
                 if let Some(row) = row {
                     let name = row.widget_name().to_string();
-                    let snap_dir = snap_entry.text().to_string();
-                    instr_tv
-                        .buffer()
-                        .set_text(&btrfs_instructions(&name, &snap_dir));
-                    del_btn.set_sensitive(true);
-                } else {
-                    del_btn.set_sensitive(false);
+                    if !name.is_empty() {
+                        let snap_dir = snap_entry.text().to_string();
+                        instr_tv
+                            .buffer()
+                            .set_text(&btrfs_instructions(&name, &snap_dir));
+                    }
+                } else if selected.is_empty() {
+                    instr_tv.buffer().set_text(
+                        "Select a snapshot from the list above to see recovery instructions.",
+                    );
                 }
             }
         ));
@@ -1099,51 +1104,53 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
         ));
     }
 
-    // Delete snapshot
+    // Delete snapshot(s)
     {
         let list_box = list_box.clone();
         let snap_entry = snap_entry.clone();
+        let create_lbl = create_lbl.clone();
         let snap_combo_ref = snap_combo_ref.clone();
         let parent_combo_ref = parent_combo_ref.clone();
         del_btn.connect_clicked(glib::clone!(
             #[weak]
             list_box,
             move |btn| {
-                if let Some(row) = list_box.selected_row() {
-                    let name = row.widget_name().to_string();
-                    let snap_path = format!("{}/{}", snap_entry.text(), name);
-                    // Try without elevation; retry via pkexec on EPERM.
-                    let del_out = std::process::Command::new("btrfs")
-                        .args(["subvolume", "delete", &snap_path])
-                        .output();
-                    let needs_elev = matches!(&del_out,
-                        Ok(o) if !o.status.success() && {
-                            let e = String::from_utf8_lossy(&o.stderr).to_lowercase();
-                            e.contains("not permitted") || e.contains("permission")
-                        }
-                    );
-                    let del_out = if needs_elev {
-                        std::process::Command::new("pkexec")
-                            .args(["btrfs", "subvolume", "delete", &snap_path])
-                            .output()
-                    } else {
-                        del_out
-                    };
-                    match del_out {
-                        Ok(o) if o.status.success() => {
-                            btrfs_populate_list(&list_box, &snap_entry.text(), "");
-                            btn.set_sensitive(false);
-                            // Refresh combos after delete too.
-                            if let (Some(sc), Some(pc)) = (
-                                snap_combo_ref.borrow().as_ref().cloned(),
-                                parent_combo_ref.borrow().as_ref().cloned(),
-                            ) {
-                                btrfs_populate_combos(&sc, &pc, &snap_entry.text(), "");
-                            }
-                        }
-                        Ok(o) => eprintln!("btrfs delete: {}", String::from_utf8_lossy(&o.stderr)),
-                        Err(e) => eprintln!("btrfs not found: {e}"),
+                let snap_dir = snap_entry.text().to_string();
+                let names = btrfs_selected_snapshots(&list_box);
+                if names.is_empty() {
+                    return;
+                }
+
+                let mut deleted = 0u32;
+                let mut last_err = String::new();
+                for name in &names {
+                    let snap_path = format!("{snap_dir}/{name}");
+                    match btrfs_delete_subvolume(&snap_path) {
+                        Ok(()) => deleted += 1,
+                        Err(e) => last_err = e,
                     }
+                }
+
+                btrfs_populate_list(&list_box, &snap_dir, "");
+                btn.set_sensitive(false);
+                if let (Some(sc), Some(pc)) = (
+                    snap_combo_ref.borrow().as_ref().cloned(),
+                    parent_combo_ref.borrow().as_ref().cloned(),
+                ) {
+                    btrfs_populate_combos(&sc, &pc, &snap_dir, "");
+                }
+
+                if deleted == names.len() as u32 {
+                    create_lbl.set_text(&format!(
+                        "\u{2705}  Deleted {deleted} snapshot(s)."
+                    ));
+                } else if deleted > 0 {
+                    create_lbl.set_text(&format!(
+                        "\u{26a0}\u{fe0f}  Deleted {deleted}/{} snapshot(s). {last_err}",
+                        names.len()
+                    ));
+                } else {
+                    create_lbl.set_text(&format!("\u{274c}  Delete failed: {last_err}"));
                 }
             }
         ));
@@ -1450,6 +1457,53 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
     }
 
     b
+}
+
+/// Return widget names of all selected snapshot rows (skips placeholder rows).
+fn btrfs_selected_snapshots(list_box: &ListBox) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut child = list_box.first_child();
+    while let Some(widget) = child {
+        if let Some(row) = widget.downcast_ref::<ListBoxRow>() {
+            if row.is_selected() {
+                let name = row.widget_name().to_string();
+                if !name.is_empty() {
+                    names.push(name);
+                }
+            }
+        }
+        child = widget.next_sibling();
+    }
+    names
+}
+
+/// Delete a read-only Btrfs subvolume, retrying via pkexec on permission errors.
+fn btrfs_delete_subvolume(snap_path: &str) -> Result<(), String> {
+    let del_out = std::process::Command::new("btrfs")
+        .args(["subvolume", "delete", snap_path])
+        .output()
+        .map_err(|e| format!("btrfs not found: {e}"))?;
+
+    let needs_elev = !del_out.status.success()
+        && {
+            let e = String::from_utf8_lossy(&del_out.stderr).to_lowercase();
+            e.contains("not permitted") || e.contains("permission")
+        };
+
+    let del_out = if needs_elev {
+        std::process::Command::new("pkexec")
+            .args(["btrfs", "subvolume", "delete", snap_path])
+            .output()
+            .map_err(|e| format!("pkexec failed: {e}"))?
+    } else {
+        del_out
+    };
+
+    if del_out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&del_out.stderr).trim().to_string())
+    }
 }
 
 /// Walk up from `path` until a Btrfs subvolume root is found (inode 256).

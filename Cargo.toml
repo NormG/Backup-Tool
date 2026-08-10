@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow     = "1.0.102"
+clap       = { version = "4", features = ["derive"] }
 chrono     = { version = "0.4.45", features = ["serde"] }
 dirs       = "6"
 glib       = "0.21"

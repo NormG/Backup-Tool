@@ -17,3 +17,6 @@ Thumbs.db
 *.log
 /tmp/
 vendor/
+
+# Local Cursor agent skills (installed from ~/.cursor/skills-source/)
+.cursor/skills/

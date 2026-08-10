@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 /// All the information we care about for a single block-device partition.
 #[derive(Debug, Clone)]
@@ -311,6 +311,33 @@ pub fn detect_label_for_path(path: &str) -> Option<String> {
     } else {
         Some(label)
     }
+}
+
+/// Available free bytes on the filesystem containing `path`.
+pub fn available_bytes(path: &Path) -> Result<u64> {
+    let out = Command::new("df")
+        .args(["--output=avail", "-B1", "--"])
+        .arg(path)
+        .output()
+        .context("running df")?;
+
+    if !out.status.success() {
+        bail!(
+            "df failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .nth(1)
+        .context("parsing df output")?
+        .trim()
+        .to_string();
+
+    line.parse::<u64>()
+        .with_context(|| format!("parsing df avail bytes '{line}'"))
 }
 
 /// Find the current mountpoint of a partition with the given UUID by querying
