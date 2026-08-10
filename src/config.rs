@@ -136,3 +136,108 @@ impl Config {
 pub fn default_one() -> u32 {
     1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── backup_hm ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn backup_hm_parses_hh_mm() {
+        let cfg = Config { backup_time: "02:30".to_string(), ..Config::default() };
+        assert_eq!(cfg.backup_hm(), (2, 30));
+    }
+
+    #[test]
+    fn backup_hm_parses_midnight() {
+        let cfg = Config { backup_time: "00:00".to_string(), ..Config::default() };
+        assert_eq!(cfg.backup_hm(), (0, 0));
+    }
+
+    #[test]
+    fn backup_hm_parses_end_of_day() {
+        let cfg = Config { backup_time: "23:59".to_string(), ..Config::default() };
+        assert_eq!(cfg.backup_hm(), (23, 59));
+    }
+
+    #[test]
+    fn backup_hm_fallback_on_invalid_string() {
+        let cfg = Config { backup_time: "not-a-time".to_string(), ..Config::default() };
+        assert_eq!(cfg.backup_hm(), (2, 0));
+    }
+
+    #[test]
+    fn backup_hm_fallback_on_empty_string() {
+        let cfg = Config { backup_time: String::new(), ..Config::default() };
+        assert_eq!(cfg.backup_hm(), (2, 0));
+    }
+
+    // ── TOML round-trip ───────────────────────────────────────────────────────
+
+    #[test]
+    fn config_toml_round_trip_preserves_all_fields() {
+        let original = Config {
+            source_dir: "/home/test".to_string(),
+            dest_dir: "/mnt/backup".to_string(),
+            drive_uuid: Some("abc-1234".to_string()),
+            drive_label: Some("My Drive".to_string()),
+            full_backup_day: "Friday".to_string(),
+            backup_time: "03:15".to_string(),
+            excludes: vec![".cache/".to_string(), "*.iso".to_string()],
+            retention_days: 14,
+            incremental_every_n_days: 2,
+            installed: true,
+        };
+        let toml_str = toml::to_string_pretty(&original).unwrap();
+        let restored: Config = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(restored.source_dir, original.source_dir);
+        assert_eq!(restored.dest_dir, original.dest_dir);
+        assert_eq!(restored.drive_uuid, original.drive_uuid);
+        assert_eq!(restored.drive_label, original.drive_label);
+        assert_eq!(restored.full_backup_day, original.full_backup_day);
+        assert_eq!(restored.backup_time, original.backup_time);
+        assert_eq!(restored.excludes, original.excludes);
+        assert_eq!(restored.retention_days, original.retention_days);
+        assert_eq!(restored.incremental_every_n_days, original.incremental_every_n_days);
+        assert_eq!(restored.installed, original.installed);
+    }
+
+    #[test]
+    fn config_optional_drive_fields_can_be_absent() {
+        let cfg = Config {
+            drive_uuid: None,
+            drive_label: None,
+            ..Config::default()
+        };
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        let restored: Config = toml::from_str(&toml_str).unwrap();
+        assert!(restored.drive_uuid.is_none());
+        assert!(restored.drive_label.is_none());
+    }
+
+    /// Old config files that pre-date `incremental_every_n_days` should
+    /// deserialise with a default of 1.
+    #[test]
+    fn config_missing_incremental_field_defaults_to_one() {
+        let toml_str = r#"
+source_dir = "/home/test"
+dest_dir = "/mnt/backup"
+full_backup_day = "Monday"
+backup_time = "02:00"
+excludes = []
+retention_days = 30
+installed = false
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.incremental_every_n_days, 1);
+    }
+
+    // ── default_one ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_one_returns_one() {
+        assert_eq!(default_one(), 1);
+    }
+}

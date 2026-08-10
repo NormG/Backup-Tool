@@ -489,6 +489,237 @@ fn notify(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// Create a unique temp directory for a test and return its path.
+    /// The caller is responsible for removing it afterwards.
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("backup-tool-test-{tag}-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn make_snapshot_dir(root: &Path, name: &str) {
+        fs::create_dir_all(root.join(name)).unwrap();
+    }
+
+    // ── BackupKind::from_str ──────────────────────────────────────────────────
+
+    #[test]
+    fn backup_kind_parses_full() {
+        for s in &["full", "Full", "FULL"] {
+            assert_eq!(s.parse::<BackupKind>().unwrap(), BackupKind::Full);
+        }
+    }
+
+    #[test]
+    fn backup_kind_parses_incremental() {
+        for s in &["incremental", "Incremental", "inc", "INC"] {
+            assert_eq!(s.parse::<BackupKind>().unwrap(), BackupKind::Incremental);
+        }
+    }
+
+    #[test]
+    fn backup_kind_parses_auto() {
+        for s in &["auto", "Auto", "AUTO"] {
+            assert_eq!(s.parse::<BackupKind>().unwrap(), BackupKind::Auto);
+        }
+    }
+
+    #[test]
+    fn backup_kind_rejects_unknown_values() {
+        for s in &["bad", "", "manual", "skip", "differential"] {
+            assert!(s.parse::<BackupKind>().is_err(), "should reject '{s}'");
+        }
+    }
+
+    // ── format_bytes ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn format_bytes_sub_kib() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1), "1 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_kib() {
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.0 KiB");
+    }
+
+    #[test]
+    fn format_bytes_mib() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MiB");
+        assert_eq!(format_bytes(10 * 1024 * 1024), "10.0 MiB");
+    }
+
+    #[test]
+    fn format_bytes_gib() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GiB");
+        assert_eq!(format_bytes(100 * 1024 * 1024 * 1024), "100.0 GiB");
+    }
+
+    // ── resolve_latest ────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_latest_empty_dir_returns_none() {
+        let dir = tmp_dir("latest-empty");
+        assert!(resolve_latest(&dir).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_latest_ignores_inprogress_dirs() {
+        let dir = tmp_dir("latest-inprogress");
+        make_snapshot_dir(&dir, ".inprogress-full-2024-01-01_120000");
+        assert!(resolve_latest(&dir).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_latest_returns_lexicographically_last() {
+        let dir = tmp_dir("latest-order");
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-02_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-03_090000"); // latest by name
+        make_snapshot_dir(&dir, ".inprogress-inc-2024-01-04_120000"); // ignored
+
+        let latest = resolve_latest(&dir).unwrap();
+        assert_eq!(
+            latest.file_name().unwrap().to_string_lossy(),
+            "inc-2024-01-03_090000"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── auto_kind ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn auto_kind_full_when_no_full_snapshot_exists() {
+        let dir = tmp_dir("auto-no-full");
+        // Only inc snapshots present — no full-* directory.
+        make_snapshot_dir(&dir, "inc-2024-01-01_120000");
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(), // won't match any real weekday
+            ..Config::default()
+        };
+        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Full);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_skips_when_recent_incremental_within_period() {
+        let dir = tmp_dir("auto-skip");
+        // A full snapshot must exist so the "no full" branch does not fire.
+        make_snapshot_dir(&dir, "full-2020-01-01_120000");
+        // Create an incremental dated today.
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        make_snapshot_dir(&dir, &format!("inc-{today}_120000"));
+        // Also create the `latest` symlink pointing at the inc.
+        let inc_path = dir.join(format!("inc-{today}_120000"));
+        let _ = std::os::unix::fs::symlink(&inc_path, dir.join("latest"));
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            incremental_every_n_days: 1,
+            ..Config::default()
+        };
+        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Skip);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_incremental_when_period_elapsed() {
+        let dir = tmp_dir("auto-inc");
+        make_snapshot_dir(&dir, "full-2020-01-01_120000");
+        // Last incremental was 5 days ago.
+        let old_date = (chrono::Local::now() - chrono::Duration::days(5))
+            .format("%Y-%m-%d")
+            .to_string();
+        make_snapshot_dir(&dir, &format!("inc-{old_date}_120000"));
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            incremental_every_n_days: 1,
+            ..Config::default()
+        };
+        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Incremental);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── apply_retention ───────────────────────────────────────────────────────
+
+    #[test]
+    fn apply_retention_never_removes_full_snapshots() {
+        let dir = tmp_dir("retention-full");
+        let full = dir.join("full-2020-01-01_120000");
+        fs::create_dir_all(&full).unwrap();
+        // Age the directory so it would be pruned if retention checked it.
+        std::process::Command::new("touch")
+            .args(["-t", "202001010000", full.to_str().unwrap()])
+            .status()
+            .unwrap();
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        apply_retention(&dir, 0, &mut log).unwrap(); // retention_days = 0 → prune all old
+        assert!(full.exists(), "full-* snapshot must never be pruned by retention");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_retention_removes_old_incrementals() {
+        let dir = tmp_dir("retention-inc");
+        let inc = dir.join("inc-2020-01-01_120000");
+        fs::create_dir_all(&inc).unwrap();
+        // Backdate the directory to 2020 so retention (0 days) will prune it.
+        std::process::Command::new("touch")
+            .args(["-t", "202001010000", inc.to_str().unwrap()])
+            .status()
+            .unwrap();
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        apply_retention(&dir, 0, &mut log).unwrap();
+        assert!(!inc.exists(), "old inc-* snapshot should be pruned");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_retention_keeps_recent_incrementals() {
+        let dir = tmp_dir("retention-keep");
+        let inc = dir.join("inc-2099-01-01_120000");
+        fs::create_dir_all(&inc).unwrap(); // mtime = now → within any sane retention window
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        apply_retention(&dir, 30, &mut log).unwrap();
+        assert!(inc.exists(), "recent inc-* snapshot must not be pruned");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
 fn build_summary(prefix: &str, final_dir: &Path, rsync_stdout: &str) -> String {
     let name = final_dir
         .file_name()
