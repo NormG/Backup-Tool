@@ -112,11 +112,11 @@ fn persist_pending(pending: bool) -> Result<()> {
             .save()?;
             set_retry_marker(true)
         } else {
-            set_retry_marker(false)?;
             PendingFullState {
                 pending_full_backup: false,
             }
-            .save()
+            .save()?;
+            set_retry_marker(false)
         }
     })
 }
@@ -200,6 +200,9 @@ pub fn set_pending_full_backup(pending: bool) -> Result<()> {
 }
 
 /// Clear all deferred-full signals after a successful full backup.
+///
+/// TOML is cleared before the marker so an interrupted process never leaves
+/// `pending-full.toml` true with the marker already removed.
 pub fn clear_pending_after_success() -> Result<()> {
     let mut last_err = None;
     for attempt in 0..10 {
@@ -213,7 +216,19 @@ pub fn clear_pending_after_success() -> Result<()> {
             }
         }
     }
-    Err(last_err.expect("retry loop always records at least one error"))
+    // Last resort: persist TOML false only (compass is authoritative).
+    with_lock(|| {
+        PendingFullState {
+            pending_full_backup: false,
+        }
+        .save()
+    })
+    .with_context(|| {
+        format!(
+            "deferred-full clear failed after 10 attempts: {}",
+            last_err.expect("retry loop always records at least one error")
+        )
+    })
 }
 
 #[cfg(test)]

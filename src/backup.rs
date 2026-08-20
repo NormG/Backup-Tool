@@ -259,14 +259,10 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        if let Err(e) = pending_full::clear_pending_after_success() {
-            log_line(
-                &mut log_file,
-                &format!(
-                    "WARNING: full snapshot succeeded but deferred-full state could not be cleared: {e}"
-                ),
-            );
-        }
+        pending_full::clear_pending_after_success().with_context(|| {
+            "full snapshot succeeded but deferred-full state could not be cleared; \
+             next automatic run may schedule another full"
+        })?;
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
