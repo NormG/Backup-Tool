@@ -32,6 +32,9 @@ impl PendingFullState {
         }
         let raw =
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        if raw.trim().is_empty() {
+            anyhow::bail!("pending-full.toml exists but is empty");
+        }
         toml::from_str(&raw).with_context(|| "parsing pending-full.toml")
     }
 

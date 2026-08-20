@@ -221,19 +221,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 9. Weekly log rotation (full backups only) ────────────────────────
     if effective_kind == BackupKind::Full {
-        if let Err(e) = archive_and_rotate_log(&final_dir) {
-            log_line(
+        match archive_and_rotate_log(&final_dir) {
+            Ok(fresh) => log_file = fresh,
+            Err(e) => log_line(
                 &mut log_file,
                 &format!("WARNING: log rotation failed (backup succeeded): {e}"),
-            );
-        } else if let Ok(fresh) = open_log_append(&Config::log_path()) {
-            log_file = fresh;
-        } else {
-            log_line(
-                &mut log_file,
-                "WARNING: could not reopen log after rotation (backup succeeded); \
-                 continuing with existing handle",
-            );
+            ),
         }
     }
 
@@ -382,7 +375,7 @@ fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &st
 
 /// Copy the active backup log into a full snapshot, then truncate it for the
 /// new backup cycle.  Archived logs live at `{snapshot}/.backup-tool/backup.log`.
-fn archive_and_rotate_log(snapshot_dir: &Path) -> Result<()> {
+fn archive_and_rotate_log(snapshot_dir: &Path) -> Result<fs::File> {
     let log_path = Config::log_path();
     let archive_path = archive_log_to_snapshot(&log_path, snapshot_dir)?;
 
@@ -399,7 +392,7 @@ fn archive_and_rotate_log(snapshot_dir: &Path) -> Result<()> {
     } else {
         writeln!(fresh, "[{ts}] Log rotated — starting fresh backup cycle")?;
     }
-    Ok(())
+    Ok(fresh)
 }
 
 fn archive_log_to_snapshot(active_log: &Path, snapshot_dir: &Path) -> Result<Option<PathBuf>> {
