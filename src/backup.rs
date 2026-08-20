@@ -84,6 +84,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     let dest_root = resolve_dest(config)?;
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
+    let pending_since = if matches!(kind, BackupKind::Auto) {
+        pending_full::pending_full_since()?
+    } else {
+        None
+    };
+
     let pending_retry = matches!(kind, BackupKind::Auto)
         && pending_full::pending_full_for_auto()?;
     let effective_kind = match kind {
@@ -92,6 +98,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             &dest_root,
             pending_retry || auto_wants_full,
             scheduled_full_date.as_deref(),
+            pending_since.as_deref(),
         ),
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
@@ -538,9 +545,13 @@ fn full_snapshot_already_satisfied(dest_root: &Path, scheduled_full_date: Option
         .is_some_and(|d| full_snapshot_exists_on_date(dest_root, d))
 }
 
-/// Pending full is satisfied when no incremental snapshot is newer than the
-/// newest full backup (e.g. clear failed after a successful full).
-fn pending_full_already_resolved(dest_root: &Path) -> bool {
+/// Pending full is satisfied when a full snapshot newer than [`pending_since`]
+/// exists and no incremental snapshot is newer than that full.
+fn pending_full_already_resolved(dest_root: &Path, pending_since: Option<&str>) -> bool {
+    let since = match pending_since {
+        Some(s) => s,
+        None => return false,
+    };
     let latest_full = match newest_full_snapshot(dest_root) {
         Some(p) => p,
         None => return false,
@@ -551,8 +562,8 @@ fn pending_full_already_resolved(dest_root: &Path) -> bool {
         .to_string_lossy()
         .into_owned();
     let full_ts = match snapshot_timestamp(&full_name) {
-        Some(ts) => ts,
-        None => return false,
+        Some(ts) if ts.as_str() > since => ts,
+        _ => return false,
     };
 
     dest_root
@@ -591,7 +602,7 @@ fn snapshot_timestamp(name: &str) -> Option<String> {
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
-    Ok(auto_kind_with_pending(config, dest_root, pending_retry, None))
+    Ok(auto_kind_with_pending(config, dest_root, pending_retry, None, None))
 }
 
 fn auto_kind_with_pending(
@@ -599,10 +610,11 @@ fn auto_kind_with_pending(
     dest_root: &Path,
     pending_full: bool,
     scheduled_full_date: Option<&str>,
+    pending_since: Option<&str>,
 ) -> BackupKind {
     if pending_full {
         if full_snapshot_already_satisfied(dest_root, scheduled_full_date)
-            || pending_full_already_resolved(dest_root)
+            || pending_full_already_resolved(dest_root, pending_since)
         {
             // Full already landed (e.g. clear failed after success) — heal state.
             let _ = pending_full::clear_pending_after_success();
@@ -892,7 +904,7 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None, None), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -906,7 +918,7 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None, None), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -921,7 +933,7 @@ mod tests {
             ..Config::default()
         };
         assert_ne!(
-            auto_kind_with_pending(&cfg, &dir, true, Some(scheduled)),
+            auto_kind_with_pending(&cfg, &dir, true, Some(scheduled), None),
             BackupKind::Full
         );
         fs::remove_dir_all(&dir).unwrap();
@@ -937,10 +949,16 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+        assert_ne!(
+            auto_kind_with_pending(&cfg, &dir, true, None, Some("2024-06-15_110000")),
+            BackupKind::Full
+        );
 
         make_snapshot_dir(&dir, "inc-2024-06-16_120000");
-        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+        assert_eq!(
+            auto_kind_with_pending(&cfg, &dir, true, None, Some("2024-06-15_110000")),
+            BackupKind::Full
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

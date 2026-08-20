@@ -14,6 +14,9 @@ use crate::config::Config;
 struct PendingFullState {
     #[serde(default)]
     pending_full_backup: bool,
+    /// Snapshot-style timestamp when pending was set (`YYYY-MM-DD_HHMMSS`).
+    #[serde(default)]
+    pending_since: Option<String>,
 }
 
 impl PendingFullState {
@@ -27,6 +30,16 @@ impl PendingFullState {
 
     fn load() -> Result<Self> {
         let path = Self::path();
+        let tmp = path.with_extension("toml.tmp");
+        if tmp.exists() {
+            if let Ok(raw) = fs::read_to_string(&tmp) {
+                if let Ok(state) = toml::from_str::<Self>(&raw) {
+                    if state.pending_full_backup {
+                        return Ok(state);
+                    }
+                }
+            }
+        }
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -108,12 +121,14 @@ fn persist_pending(pending: bool) -> Result<()> {
         if pending {
             PendingFullState {
                 pending_full_backup: true,
+                pending_since: Some(chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()),
             }
             .save()?;
             set_retry_marker(true)
         } else {
             PendingFullState {
                 pending_full_backup: false,
+                pending_since: None,
             }
             .save()?;
             set_retry_marker(false)
@@ -127,21 +142,25 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
+pub fn pending_full_since() -> Result<Option<String>> {
+    with_lock(|| Ok(PendingFullState::load()?.pending_since))
+}
+
 /// Whether auto mode should retry a deferred full.
 ///
 /// `pending-full.toml` is authoritative whenever it is readable. The retry
 /// marker is consulted only when the TOML file is missing or quarantined.
 pub fn pending_full_for_auto() -> Result<bool> {
-    if PendingFullState::path().exists() {
-        match pending_full_backup() {
-            Ok(false) => {
+    if PendingFullState::path().exists() || PendingFullState::path().with_extension("toml.tmp").exists() {
+        match PendingFullState::load() {
+            Ok(state) if !state.pending_full_backup => {
                 // Trust the compass — drop a stale marker left by interrupted I/O.
                 if retry_marker_path().exists() {
                     let _ = set_retry_marker(false);
                 }
                 Ok(false)
             }
-            Ok(true) => Ok(true),
+            Ok(state) => Ok(state.pending_full_backup),
             Err(e) => {
                 quarantine_corrupt_toml()?;
                 if retry_marker_path().exists() {
@@ -177,6 +196,7 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
         with_lock(|| {
             PendingFullState {
                 pending_full_backup: true,
+                pending_since: Some(chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string()),
             }
             .save()
         })
@@ -218,6 +238,7 @@ pub fn clear_pending_after_success() -> Result<()> {
     with_lock(|| {
         PendingFullState {
             pending_full_backup: false,
+            pending_since: None,
         }
         .save()
     })
@@ -274,10 +295,24 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_tmp_toml_true_is_honored() {
+        with_temp_data(|_| {
+            let path = PendingFullState::path();
+            let tmp = path.with_extension("toml.tmp");
+            fs::write(
+                &tmp,
+                "pending_full_backup = true\npending_since = \"2024-06-15_120000\"\n",
+            )
+            .unwrap();
+            assert!(pending_full_for_auto().unwrap());
+        });
+    }
+    #[test]
     fn stale_marker_cleared_when_toml_is_false() {
         with_temp_data(|_| {
             PendingFullState {
                 pending_full_backup: false,
+                pending_since: None,
             }
             .save()
             .unwrap();
