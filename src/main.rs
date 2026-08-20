@@ -3,6 +3,7 @@ mod backup;
 mod config;
 mod drives;
 mod pending_full;
+mod run_lock;
 mod systemd;
 mod ui;
 mod year_end;

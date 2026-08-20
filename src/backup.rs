@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use crate::{config::Config, drives, pending_full};
+use crate::{config::Config, drives, pending_full, run_lock};
 
 /// Which kind of snapshot to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +42,15 @@ impl std::str::FromStr for BackupKind {
 ///
 /// Returns a human-readable summary suitable for display in the GUI.
 pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
+    let _run_lock = match run_lock::RunLock::try_acquire()? {
+        Some(lock) => lock,
+        None => {
+            return Ok(
+                "Backup skipped: another backup is already in progress.".to_string(),
+            );
+        }
+    };
+
     // ── 1. Ensure the destination directory is reachable ──────────────────
     let dest_root = resolve_dest(config)?;
 
@@ -482,7 +491,7 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
     auto_kind_with_pending(
         config,
         dest_root,
-        pending_full::pending_full_backup_or_assume_pending(),
+        pending_full::pending_full_for_auto(),
     )
 }
 

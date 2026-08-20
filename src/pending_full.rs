@@ -69,17 +69,17 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
-/// Like [`pending_full_backup`], but returns `true` on I/O or parse errors so
-/// auto mode retries a full instead of silently dropping a deferred retry.
-pub fn pending_full_backup_or_assume_pending() -> bool {
+/// Pending flag for auto mode. Returns `false` when the state file cannot be
+/// read so automatic runs follow the normal schedule instead of forcing full.
+pub fn pending_full_for_auto() -> bool {
     match pending_full_backup() {
         Ok(pending) => pending,
         Err(e) => {
             eprintln!(
                 "WARNING: could not read pending-full.toml ({e}); \
-                 assuming deferred full is still pending"
+                 using normal backup schedule"
             );
-            true
+            false
         }
     }
 }
