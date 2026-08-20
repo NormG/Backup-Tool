@@ -47,6 +47,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(7200))? {
             Some(lock) => lock,
             None => {
+                if is_full_backup_day(config) {
+                    pending_full::set_pending_full_backup_with_retry(true).with_context(|| {
+                        "timed out waiting for run lock on scheduled full-backup day"
+                    })?;
+                }
                 anyhow::bail!(
                     "Timed out after 2 hours waiting for an in-progress backup to finish"
                 );
@@ -243,14 +248,9 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        if let Err(e) = pending_full::clear_pending_after_success() {
-            log_line(
-                &mut log_file,
-                &format!(
-                    "WARNING: could not clear deferred-full retry state after successful full: {e}"
-                ),
-            );
-        }
+        pending_full::clear_pending_after_success().with_context(|| {
+            "full snapshot succeeded but deferred-full retry state could not be cleared"
+        })?;
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
@@ -486,6 +486,11 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
          Please plug in the backup drive and try again.",
         config.dest_dir
     )
+}
+
+fn is_full_backup_day(config: &Config) -> bool {
+    let today = Local::now().format("%A").to_string();
+    today.eq_ignore_ascii_case(&config.full_backup_day)
 }
 
 /// Decide the backup kind based on the day of week, existing snapshots,

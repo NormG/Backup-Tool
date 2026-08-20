@@ -187,7 +187,19 @@ pub fn set_pending_full_backup(pending: bool) -> Result<()> {
 
 /// Clear all deferred-full signals after a successful full backup.
 pub fn clear_pending_after_success() -> Result<()> {
-    set_pending_full_backup_with_retry(false)
+    let mut last_err = None;
+    for attempt in 0..10 {
+        match persist_pending(false) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < 10 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+    Err(last_err.expect("retry loop always records at least one error"))
 }
 
 #[cfg(test)]
