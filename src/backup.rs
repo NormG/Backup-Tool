@@ -45,6 +45,13 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     let _run_lock = match run_lock::RunLock::try_acquire()? {
         Some(lock) => lock,
         None => {
+            if matches!(kind, BackupKind::Auto) && scheduled_full_missed(config) {
+                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
+                    eprintln!(
+                        "WARNING: could not record deferred-full retry after lock contention: {e}"
+                    );
+                }
+            }
             return Ok(
                 "Backup skipped: another backup is already in progress.".to_string(),
             );
@@ -479,6 +486,13 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
          Please plug in the backup drive and try again.",
         config.dest_dir
     )
+}
+
+/// Returns true when auto mode should treat today as a missed or pending full.
+fn scheduled_full_missed(config: &Config) -> bool {
+    let today = Local::now().format("%A").to_string();
+    let is_full_day = today.eq_ignore_ascii_case(&config.full_backup_day);
+    is_full_day || pending_full::pending_full_for_auto().unwrap_or(false)
 }
 
 /// Decide the backup kind based on the day of week, existing snapshots,
