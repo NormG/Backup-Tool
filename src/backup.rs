@@ -46,7 +46,7 @@ const AUTO_LOCK_WAIT_SECS: u64 = 7200;
 /// Budget for rsync after the lock is acquired (large home trees can take hours).
 const BACKUP_RUN_BUDGET_SECS: u64 = 6 * 3600;
 
-/// systemd `[Service]` TimeoutStartSec — lock wait plus rsync budget.
+/// Documented minimum for systemd `TimeoutStartSec`; the unit uses `infinity`.
 pub(crate) const SYSTEMD_SERVICE_TIMEOUT_START_SECS: u64 =
     AUTO_LOCK_WAIT_SECS + BACKUP_RUN_BUDGET_SECS;
 
@@ -57,6 +57,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     // Capture before the lock wait so a midnight crossing cannot change the plan.
     let auto_wants_full = matches!(kind, BackupKind::Auto)
         && (pending_full::pending_full_for_auto()? || is_full_backup_day(config));
+    let scheduled_full_date = if matches!(kind, BackupKind::Auto) && is_full_backup_day(config) {
+        Some(Local::now().format("%Y-%m-%d").to_string())
+    } else {
+        None
+    };
 
     let _run_lock = match kind {
         BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(AUTO_LOCK_WAIT_SECS))? {
@@ -94,6 +99,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             config,
             &dest_root,
             pending_retry || auto_wants_full,
+            scheduled_full_date.as_deref(),
         ),
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
@@ -514,29 +520,46 @@ fn is_full_backup_day(config: &Config) -> bool {
     today.eq_ignore_ascii_case(&config.full_backup_day)
 }
 
-fn full_snapshot_exists_today(dest_root: &Path) -> bool {
-    let today = Local::now().format("%Y-%m-%d").to_string();
+fn full_snapshot_exists_on_date(dest_root: &Path, date: &str) -> bool {
     dest_root
         .read_dir()
         .map(|rd| {
             rd.flatten().any(|e| {
                 let file_name = e.file_name();
                 let name = file_name.to_string_lossy();
-                name.starts_with("full-") && name.contains(&today)
+                name.starts_with("full-") && name.contains(date)
             })
         })
         .unwrap_or(false)
 }
 
+fn full_snapshot_exists_today(dest_root: &Path) -> bool {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    full_snapshot_exists_on_date(dest_root, &today)
+}
+
+fn full_snapshot_already_satisfied(dest_root: &Path, scheduled_full_date: Option<&str>) -> bool {
+    if full_snapshot_exists_today(dest_root) {
+        return true;
+    }
+    scheduled_full_date
+        .is_some_and(|d| full_snapshot_exists_on_date(dest_root, d))
+}
+
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
-    Ok(auto_kind_with_pending(config, dest_root, pending_retry))
+    Ok(auto_kind_with_pending(config, dest_root, pending_retry, None))
 }
 
-fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool) -> BackupKind {
+fn auto_kind_with_pending(
+    config: &Config,
+    dest_root: &Path,
+    pending_full: bool,
+    scheduled_full_date: Option<&str>,
+) -> BackupKind {
     if pending_full {
-        if full_snapshot_exists_today(dest_root) {
+        if full_snapshot_already_satisfied(dest_root, scheduled_full_date) {
             // Full already landed (e.g. clear failed after success) — heal state.
             let _ = pending_full::clear_pending_after_success();
         } else {
@@ -559,7 +582,7 @@ fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool)
         return BackupKind::Full;
     }
 
-    if is_full_day && !full_snapshot_exists_today(dest_root) {
+    if is_full_day && !full_snapshot_already_satisfied(dest_root, scheduled_full_date) {
         return BackupKind::Full;
     }
 
@@ -825,7 +848,7 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_eq!(auto_kind_with_pending(&cfg, &dir, true), BackupKind::Full);
+        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -839,7 +862,24 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_ne!(auto_kind_with_pending(&cfg, &dir, true), BackupKind::Full);
+        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_skips_pending_when_scheduled_full_date_snapshot_exists() {
+        let dir = tmp_dir("auto-pending-scheduled-date");
+        let scheduled = "2024-06-15";
+        make_snapshot_dir(&dir, &format!("full-{scheduled}_120000"));
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            ..Config::default()
+        };
+        assert_ne!(
+            auto_kind_with_pending(&cfg, &dir, true, Some(scheduled)),
+            BackupKind::Full
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

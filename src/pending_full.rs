@@ -180,15 +180,18 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
                 last_err.expect("retry loop always records at least one error")
             )
         })?;
-        // Keep the compass aligned with the marker fallback.
-        with_lock(|| {
+        match with_lock(|| {
             PendingFullState {
                 pending_full_backup: true,
             }
             .save()
-        })
-        .with_context(|| "writing pending-full.toml after marker fallback")?;
-        Ok(())
+        }) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = set_retry_marker(false);
+                Err(e).context("writing pending-full.toml after marker fallback")
+            }
+        }
     } else {
         Err(last_err.expect("retry loop always records at least one error"))
     }
