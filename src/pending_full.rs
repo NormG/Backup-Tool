@@ -130,8 +130,11 @@ pub fn pending_full_for_auto() -> Result<bool> {
                 "WARNING: pending-full.toml unreadable ({e}); \
                  checking retry marker and backup log"
             );
-            let _ = fs::remove_file(PendingFullState::path());
-            Ok(log_indicates_deferred_full())
+            let from_log = log_indicates_deferred_full();
+            if !from_log {
+                let _ = fs::remove_file(PendingFullState::path());
+            }
+            Ok(from_log)
         }
     }
 }

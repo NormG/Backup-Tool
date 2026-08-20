@@ -46,6 +46,14 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         Some(lock) => lock,
         None => {
             if matches!(kind, BackupKind::Auto) && scheduled_full_missed(config) {
+                let log_path = Config::log_path();
+                if let Ok(mut log) = open_log_append(&log_path) {
+                    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+                    let _ = writeln!(
+                        log,
+                        "[{ts}] Full backup deferred — another backup is already in progress; will retry full on next run."
+                    );
+                }
                 if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
                     eprintln!(
                         "WARNING: could not record deferred-full retry after lock contention: {e}"
