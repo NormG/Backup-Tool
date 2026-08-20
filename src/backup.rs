@@ -562,7 +562,7 @@ fn pending_full_already_resolved(dest_root: &Path, pending_since: Option<&str>) 
         .to_string_lossy()
         .into_owned();
     let full_ts = match snapshot_timestamp(&full_name) {
-        Some(ts) if ts.as_str() > since => ts,
+        Some(ts) if ts.as_str() >= since => ts,
         _ => return false,
     };
 
@@ -957,6 +957,22 @@ mod tests {
         make_snapshot_dir(&dir, "inc-2024-06-16_120000");
         assert_eq!(
             auto_kind_with_pending(&cfg, &dir, true, None, Some("2024-06-15_110000")),
+            BackupKind::Full
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_skips_pending_when_full_matches_pending_since_second() {
+        let dir = tmp_dir("auto-pending-same-second");
+        make_snapshot_dir(&dir, "full-2024-06-15_120000");
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            ..Config::default()
+        };
+        assert_ne!(
+            auto_kind_with_pending(&cfg, &dir, true, None, Some("2024-06-15_120000")),
             BackupKind::Full
         );
         fs::remove_dir_all(&dir).unwrap();
