@@ -55,6 +55,25 @@ fn retry_marker_path() -> PathBuf {
     Config::data_dir().join("pending-full.retry")
 }
 
+/// Last-resort signal when both toml and marker are unavailable.
+fn log_indicates_deferred_full() -> bool {
+    let path = Config::log_path();
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return false;
+    };
+    let mut saw_defer = false;
+    for line in raw.lines().rev().take(300) {
+        if line.contains("Completed full snapshot") || line.contains("Starting full backup →") {
+            break;
+        }
+        if line.contains("Full backup deferred") {
+            saw_defer = true;
+            break;
+        }
+    }
+    saw_defer
+}
+
 fn set_retry_marker(pending: bool) -> Result<()> {
     let path = retry_marker_path();
     if pending {
@@ -109,10 +128,10 @@ pub fn pending_full_for_auto() -> Result<bool> {
         Err(e) => {
             eprintln!(
                 "WARNING: pending-full.toml unreadable ({e}); \
-                 removing corrupt file and using normal schedule"
+                 checking retry marker and backup log"
             );
             let _ = fs::remove_file(PendingFullState::path());
-            Ok(false)
+            Ok(log_indicates_deferred_full())
         }
     }
 }
@@ -161,6 +180,13 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
 
 pub fn set_pending_full_backup(pending: bool) -> Result<()> {
     set_pending_full_backup_with_retry(pending)
+}
+
+/// Clear all deferred-full signals after a successful full backup.
+pub fn clear_pending_after_success() -> Result<()> {
+    let r1 = set_pending_full_backup_with_retry(false);
+    let r2 = set_retry_marker(false);
+    r1.and(r2)
 }
 
 #[cfg(test)]

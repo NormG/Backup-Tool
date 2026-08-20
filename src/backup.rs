@@ -77,12 +77,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
-                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
-                    eprintln!(
-                        "WARNING: could not persist deferred-full retry state: {e}; \
-                         continuing with incremental fallback"
-                    );
-                }
                 let msg = format!(
                     "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
                     format_bytes(available),
@@ -92,6 +86,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 if let Ok(mut log) = open_log_append(&log_path) {
                     let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
                     let _ = writeln!(log, "[{ts}] {msg}");
+                }
+                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
+                    eprintln!(
+                        "WARNING: could not persist deferred-full retry state: {e}; \
+                         retry will rely on backup.log until state is saved"
+                    );
                 }
                 BackupKind::Incremental
             }
@@ -235,11 +235,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        if let Err(e) = pending_full::set_pending_full_backup_with_retry(false) {
+        if let Err(e) = pending_full::clear_pending_after_success() {
             log_line(
                 &mut log_file,
                 &format!(
-                    "WARNING: could not clear pending-full.toml after 3 attempts \
+                    "WARNING: could not fully clear deferred-full retry state \
                      (backup succeeded; next auto run may repeat this full): {e}"
                 ),
             );
