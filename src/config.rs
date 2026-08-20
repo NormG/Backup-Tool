@@ -97,6 +97,17 @@ impl Config {
         Self::data_dir().join("backup.log")
     }
 
+    /// Serialize tests that override [`data_dir`] via `BACKUP_TOOL_DATA_DIR`.
+    #[cfg(test)]
+    pub(crate) fn lock_test_data_dir() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        match LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poison) => poison.into_inner(),
+        }
+    }
+
     /// Legacy config path from before the home-backup → backup-tool rename.
     fn legacy_config_path() -> PathBuf {
         dirs::config_dir()

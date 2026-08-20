@@ -69,6 +69,12 @@ mod tests {
 
     #[test]
     fn second_acquire_fails_while_first_held() {
+        let _guard = Config::lock_test_data_dir();
+        let dir = std::env::temp_dir().join(format!("backup-tool-runlock-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("BACKUP_TOOL_DATA_DIR", &dir);
+
         let first = RunLock::try_acquire()
             .unwrap()
             .expect("first acquire should succeed");
@@ -81,5 +87,8 @@ mod tests {
             RunLock::try_acquire().unwrap().is_some(),
             "lock should be available after drop"
         );
+
+        std::env::remove_var("BACKUP_TOOL_DATA_DIR");
+        let _ = fs::remove_dir_all(dir);
     }
 }

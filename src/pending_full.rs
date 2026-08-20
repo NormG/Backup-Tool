@@ -133,9 +133,11 @@ pub fn pending_full_for_auto() -> Result<bool> {
         match pending_full_backup() {
             Ok(false) => {
                 if retry_marker_path().exists() {
-                    let _ = set_retry_marker(false);
+                    // Marker-only fallback while stale toml still says false.
+                    persist_pending(true)?;
+                    return Ok(true);
                 }
-                return Ok(false);
+                Ok(false)
             }
             Ok(true) => return Ok(true),
             Err(e) => {
@@ -208,6 +210,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn with_temp_data<R>(f: impl FnOnce(&PathBuf) -> R) -> R {
+        let _guard = Config::lock_test_data_dir();
         let dir = std::env::temp_dir().join(format!(
             "backup-tool-pending-test-{}",
             std::process::id()
@@ -248,17 +251,22 @@ mod tests {
     #[test]
     fn stale_marker_cleared_when_toml_is_false() {
         with_temp_data(|_| {
-            set_pending_full_backup_with_retry(true).unwrap();
             clear_pending_after_success().unwrap();
-            // Simulate interrupted clear: marker left behind after toml cleared.
-            set_retry_marker(true).unwrap();
+            assert!(!pending_full_for_auto().unwrap());
+        });
+    }
+
+    #[test]
+    fn marker_fallback_reconciles_stale_false_toml() {
+        with_temp_data(|_| {
             PendingFullState {
                 pending_full_backup: false,
             }
             .save()
             .unwrap();
-            assert!(!pending_full_for_auto().unwrap());
-            assert!(!retry_marker_path().exists());
+            set_retry_marker(true).unwrap();
+            assert!(pending_full_for_auto().unwrap());
+            assert!(pending_full_backup().unwrap());
         });
     }
 }
