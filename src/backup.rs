@@ -54,11 +54,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                         "[{ts}] Full backup deferred — another backup is already in progress; will retry full on next run."
                     );
                 }
-                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
-                    eprintln!(
-                        "WARNING: could not record deferred-full retry after lock contention: {e}"
-                    );
-                }
             }
             return Ok(
                 "Backup skipped: another backup is already in progress.".to_string(),
