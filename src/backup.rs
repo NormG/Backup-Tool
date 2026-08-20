@@ -87,10 +87,18 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 BackupKind::Incremental
             }
             FullPrep::Blocked { available, needed } => {
-                let _ = pending_full::set_pending_full_backup(true);
+                let persist_warn = pending_full::set_pending_full_backup(true)
+                    .err()
+                    .map(|e| {
+                        format!(
+                            "\n\n⚠️  Could not persist deferred-full retry state ({e}); \
+                             the next automatic run may not retry this full."
+                        )
+                    })
+                    .unwrap_or_default();
                 return Ok(format!(
                     "Full backup blocked: need {} free but only {} available.\n\
-                     Free space on the backup drive or remove old full-* snapshots, then retry.",
+                     Free space on the backup drive or remove old full-* snapshots, then retry.{persist_warn}",
                     format_bytes(needed),
                     format_bytes(available)
                 ));
