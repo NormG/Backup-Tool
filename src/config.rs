@@ -19,12 +19,19 @@ pub struct Config {
     pub backup_time: String,
     /// rsync exclude patterns, one per entry.
     pub excludes: Vec<String>,
-    /// Number of days incremental backups are kept before deletion.
+    /// Safety net: delete orphaned incrementals older than this many days when
+    /// a scheduled full backup has not run yet.  Incrementals from the current
+    /// cycle are removed automatically when the next full succeeds.
     pub retention_days: u32,
     /// How many days must pass between incremental backups (1 = every day).
     /// Old config files that omit this field default to 1.
     #[serde(default = "default_one")]
     pub incremental_every_n_days: u32,
+    /// How many full snapshots to keep on the backup drive (0 = unlimited).
+    /// When a new full succeeds, older full-* directories beyond this count
+    /// are deleted automatically.
+    #[serde(default = "default_twelve")]
+    pub keep_full_snapshots: u32,
     /// True after a successful first install so the wizard is not shown again.
     pub installed: bool,
 }
@@ -60,6 +67,7 @@ impl Default for Config {
             ],
             retention_days: 30,
             incremental_every_n_days: 1,
+            keep_full_snapshots: 12,
             installed: false,
         }
     }
@@ -130,11 +138,25 @@ impl Config {
         let m = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0u8);
         (h, m)
     }
+
+    /// Human-readable label for `keep_full_snapshots` (0 → "unlimited").
+    pub fn keep_full_snapshots_label(&self) -> String {
+        if self.keep_full_snapshots == 0 {
+            "unlimited".to_string()
+        } else {
+            self.keep_full_snapshots.to_string()
+        }
+    }
 }
 
 // Used by #[serde(default = "default_one")] on Config::incremental_every_n_days.
 pub fn default_one() -> u32 {
     1
+}
+
+// Used by #[serde(default = "default_twelve")] on Config::keep_full_snapshots.
+pub fn default_twelve() -> u32 {
+    12
 }
 
 #[cfg(test)]
@@ -145,31 +167,46 @@ mod tests {
 
     #[test]
     fn backup_hm_parses_hh_mm() {
-        let cfg = Config { backup_time: "02:30".to_string(), ..Config::default() };
+        let cfg = Config {
+            backup_time: "02:30".to_string(),
+            ..Config::default()
+        };
         assert_eq!(cfg.backup_hm(), (2, 30));
     }
 
     #[test]
     fn backup_hm_parses_midnight() {
-        let cfg = Config { backup_time: "00:00".to_string(), ..Config::default() };
+        let cfg = Config {
+            backup_time: "00:00".to_string(),
+            ..Config::default()
+        };
         assert_eq!(cfg.backup_hm(), (0, 0));
     }
 
     #[test]
     fn backup_hm_parses_end_of_day() {
-        let cfg = Config { backup_time: "23:59".to_string(), ..Config::default() };
+        let cfg = Config {
+            backup_time: "23:59".to_string(),
+            ..Config::default()
+        };
         assert_eq!(cfg.backup_hm(), (23, 59));
     }
 
     #[test]
     fn backup_hm_fallback_on_invalid_string() {
-        let cfg = Config { backup_time: "not-a-time".to_string(), ..Config::default() };
+        let cfg = Config {
+            backup_time: "not-a-time".to_string(),
+            ..Config::default()
+        };
         assert_eq!(cfg.backup_hm(), (2, 0));
     }
 
     #[test]
     fn backup_hm_fallback_on_empty_string() {
-        let cfg = Config { backup_time: String::new(), ..Config::default() };
+        let cfg = Config {
+            backup_time: String::new(),
+            ..Config::default()
+        };
         assert_eq!(cfg.backup_hm(), (2, 0));
     }
 
@@ -187,6 +224,7 @@ mod tests {
             excludes: vec![".cache/".to_string(), "*.iso".to_string()],
             retention_days: 14,
             incremental_every_n_days: 2,
+            keep_full_snapshots: 6,
             installed: true,
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
@@ -200,7 +238,11 @@ mod tests {
         assert_eq!(restored.backup_time, original.backup_time);
         assert_eq!(restored.excludes, original.excludes);
         assert_eq!(restored.retention_days, original.retention_days);
-        assert_eq!(restored.incremental_every_n_days, original.incremental_every_n_days);
+        assert_eq!(
+            restored.incremental_every_n_days,
+            original.incremental_every_n_days
+        );
+        assert_eq!(restored.keep_full_snapshots, original.keep_full_snapshots);
         assert_eq!(restored.installed, original.installed);
     }
 
@@ -232,6 +274,7 @@ installed = false
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.incremental_every_n_days, 1);
+        assert_eq!(cfg.keep_full_snapshots, 12);
     }
 
     // ── default_one ───────────────────────────────────────────────────────────
@@ -239,5 +282,10 @@ installed = false
     #[test]
     fn default_one_returns_one() {
         assert_eq!(default_one(), 1);
+    }
+
+    #[test]
+    fn default_twelve_returns_twelve() {
+        assert_eq!(default_twelve(), 12);
     }
 }

@@ -17,8 +17,11 @@ hardlinked so they consume no extra disk space.
   snapshots via `--link-dest`; only deltas use new space
 - **Automatic drive handling** — if the drive is not mounted at backup time the
   app attempts to mount it by UUID via `udisksctl` (no root required)
-- **Retention policy** — incremental snapshots older than a configurable number
-  of days are pruned automatically
+- **Retention policy** — incrementals from the current cycle are removed when
+  the next full backup succeeds; orphaned incrementals older than
+  `retention_days` are pruned as a safety net if a full is delayed
+- **Full snapshot limit** — keep the newest `keep_full_snapshots` full backups
+  (default 12); set to `0` for unlimited
 - **Exclude patterns** — editable per-line list stored in the config file;
   defaults exclude caches, trash, disc images, and browser data
 - **Systemd user timer** — fully user-level (no root, no cron); survives reboots
@@ -140,7 +143,7 @@ The manager has seven tabs:
 - Full-backup day of week
 - Daily backup time with **12h / 24h toggle** — zero-padded spinbuttons, AM/PM selector
 - Incremental backup period (1 = daily … 7 = weekly)
-- Retention days for incremental snapshots
+- Retention days for orphaned incrementals (safety net) and full snapshot count
 - **Save & Reload Timer** rewrites the systemd timer unit and restarts it
 
 ### Excludes
@@ -155,7 +158,8 @@ The manager has seven tabs:
 - Same-filesystem guard prevents saving an unsafe configuration
 
 ### Log
-- Shows the content of `~/.local/share/backup-tool/backup.log`
+- Shows the content of `~/.local/share/backup-tool/backup.log` (current cycle
+  only; older cycles are archived inside each full snapshot)
 - **Reload** refreshes the view
 
 ### About
@@ -205,7 +209,8 @@ drive_uuid       = "652e0201-35c2-4460-9709-2f620ddc4d22"
 drive_label      = "Backup"
 full_backup_day  = "Monday"
 backup_time      = "02:00"
-retention_days   = 30
+retention_days       = 30
+keep_full_snapshots  = 12
 installed        = true
 
 excludes = [
@@ -247,19 +252,30 @@ immediately.
 └── latest -> inc-2026-07-26_020004   ← always points to the newest snapshot
 ```
 
+Each full snapshot also stores the previous week's operational log at
+`full-YYYY-MM-DD_HHmmss/.backup-tool/backup.log` (rotated automatically when
+the full succeeds).  Search archived logs alongside the snapshot they describe.
+
 Hardlinked files in incremental snapshots appear as complete directories but
 share disk blocks with the full (or previous incremental) they were derived from.
 
 **A few things worth knowing about disk usage and pruning:**
 
-- **Full backups are never automatically pruned** — only incrementals older than
-  `retention_days` are deleted.  Full snapshots accumulate until you remove them
-  manually, so periodically review and delete old ones to free space.
+- **Incrementals reset on each full** — when a full backup succeeds, all
+  `inc-*` snapshots from the previous cycle are deleted automatically.
+- **Full snapshot limit** — only the newest `keep_full_snapshots` full backups
+  are kept (default 12, e.g. one year of monthly fulls).  Set to `0` to keep
+  all full snapshots.
+- **Orphan incrementals** — if a scheduled full is delayed, incrementals older
+  than `retention_days` are removed as a safety net.
+- **Weekly log rotation** — on each successful full backup, operational log
+  lines (`[timestamp] …`) are archived into that full snapshot under
+  `.backup-tool/backup.log` and the active log is truncated.  Per-file rsync
+  detail goes to a temp file that is discarded.
 - **Each full backup is a complete copy** — no hardlinks from previous fulls, so
-  every weekly full uses roughly the same space as your home directory.  Plan
-  drive capacity accordingly (e.g. 3 full backups + 6 incrementals each week).
-- **Incrementals reset after each full** — on the day after a full backup,
-  incrementals begin hardlinking from the new full, so they stay lean again.
+  every full uses roughly the same space as your home directory.  Plan drive
+  capacity for `keep_full_snapshots` full copies plus daily incrementals during
+  each cycle.
 
 ---
 

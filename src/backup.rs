@@ -137,7 +137,9 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         "--stats",
     ]);
     cmd.arg(format!("--exclude-from={}", exclude_path.display()));
-    cmd.arg(format!("--log-file={}", log_path.display()));
+    // Per-run rsync detail goes to a temp file — not the main backup.log.
+    let rsync_log = Config::data_dir().join(format!("rsync-{stamp}.log"));
+    cmd.arg(format!("--log-file={}", rsync_log.display()));
 
     // For incrementals: hardlink unchanged files from the latest snapshot.
     if effective_kind == BackupKind::Incremental {
@@ -164,6 +166,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     // rsync exit 24 = source files vanished (normal for live home dirs).
     if !output.status.success() && exit_code != 24 {
         let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_file(&rsync_log);
         bail!("rsync failed with exit code {exit_code}");
     }
 
@@ -173,6 +176,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             "[{log_ts}] WARNING: exit 24 — some files vanished during transfer (non-fatal)"
         )?;
     }
+    let _ = fs::remove_file(&rsync_log);
 
     // ── 8. Atomic rename & update latest symlink ──────────────────────────
     fs::rename(&temp_dir, &final_dir)
@@ -191,10 +195,29 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         final_dir.file_name().unwrap_or_default().to_string_lossy()
     )?;
 
-    // ── 9. Retention: prune old incrementals ──────────────────────────────
-    apply_retention(&dest_root, config.retention_days, &mut log_file)?;
+    // ── 9. Weekly log rotation (full backups only) ────────────────────────
+    if effective_kind == BackupKind::Full {
+        if let Err(e) = archive_and_rotate_log(&final_dir) {
+            log_line(
+                &mut log_file,
+                &format!("WARNING: log rotation failed (backup succeeded): {e}"),
+            );
+        } else {
+            log_file = open_log_append(&Config::log_path())?;
+        }
+    }
 
-    // ── 10. Desktop notification (best-effort) ─────────────────────────────
+    // ── 10. Retention ─────────────────────────────────────────────────────
+    if effective_kind == BackupKind::Full {
+        // Current-cycle incrementals are superseded by the new full.
+        prune_all_incrementals(&dest_root, &mut log_file)?;
+        apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
+    } else {
+        // Safety net for orphaned incrementals when a full has not run recently.
+        apply_retention(&dest_root, config.retention_days, &mut log_file)?;
+    }
+
+    // ── 11. Desktop notification (best-effort) ─────────────────────────────
     let _ = notify(
         "Backup-Tool",
         &format!("{prefix} snapshot created successfully"),
@@ -221,19 +244,11 @@ enum FullPrep {
     Blocked { available: u64, needed: u64 },
 }
 
-/// Before a full backup: prune old incrementals, then ensure the drive has
-/// enough free space for a complete copy (old snapshots remain during rsync).
-fn prepare_full_backup(config: &Config, dest_root: &Path) -> Result<FullPrep> {
+/// Before a full backup: check free space, then prune incrementals only when
+/// the full will actually proceed (not when deferring to incremental).
+fn prepare_full_backup(_config: &Config, dest_root: &Path) -> Result<FullPrep> {
     let log_path = Config::log_path();
     let mut log = open_log_append(&log_path)?;
-
-    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-    writeln!(
-        log,
-        "[{ts}] Full backup scheduled — pruning incrementals older than {}d first",
-        config.retention_days
-    )?;
-    apply_retention(dest_root, config.retention_days, &mut log)?;
 
     let available = drives::available_bytes(dest_root)?;
     let needed = full_backup_bytes_needed(dest_root)?;
@@ -242,10 +257,11 @@ fn prepare_full_backup(config: &Config, dest_root: &Path) -> Result<FullPrep> {
     if available >= needed {
         writeln!(
             log,
-            "[{ts}] Space check passed: {} free, {} required",
+            "[{ts}] Space check passed: {} free, {} required — removing incrementals from previous cycle",
             format_bytes(available),
             format_bytes(needed)
         )?;
+        prune_all_incrementals(dest_root, &mut log)?;
         return Ok(FullPrep::Proceed);
     }
 
@@ -310,6 +326,70 @@ fn open_log_append(log_path: &Path) -> Result<fs::File> {
         .append(true)
         .open(log_path)
         .with_context(|| format!("opening log {}", log_path.display()))
+}
+
+fn log_line(log: &mut fs::File, message: &str) {
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let _ = writeln!(log, "[{ts}] {message}");
+}
+
+fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &str) {
+    if let Err(e) = fs::remove_dir_all(path) {
+        log_line(
+            log,
+            &format!("WARNING: could not remove {context} {name}: {e}"),
+        );
+    } else {
+        log_line(log, &format!("Retention: removed {name}"));
+    }
+}
+
+/// Copy the active backup log into a full snapshot, then truncate it for the
+/// new backup cycle.  Archived logs live at `{snapshot}/.backup-tool/backup.log`.
+fn archive_and_rotate_log(snapshot_dir: &Path) -> Result<()> {
+    let log_path = Config::log_path();
+    let archive_path = archive_log_to_snapshot(&log_path, snapshot_dir)?;
+
+    fs::write(&log_path, "").with_context(|| format!("truncating log {}", log_path.display()))?;
+
+    let mut fresh = open_log_append(&log_path)?;
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    if let Some(archived) = archive_path {
+        writeln!(
+            fresh,
+            "[{ts}] Log rotated — previous cycle archived to {}",
+            archived.display()
+        )?;
+    } else {
+        writeln!(fresh, "[{ts}] Log rotated — starting fresh backup cycle")?;
+    }
+    Ok(())
+}
+
+fn archive_log_to_snapshot(active_log: &Path, snapshot_dir: &Path) -> Result<Option<PathBuf>> {
+    if !active_log.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(active_log)
+        .with_context(|| format!("reading log {}", active_log.display()))?;
+    // Keep operational lines only — rsync per-file detail is discarded.
+    let trimmed: String = raw
+        .lines()
+        .filter(|line| line.starts_with('['))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let archive_dir = snapshot_dir.join(".backup-tool");
+    fs::create_dir_all(&archive_dir)
+        .with_context(|| format!("creating log archive dir {}", archive_dir.display()))?;
+    let archive_path = archive_dir.join("backup.log");
+    fs::write(&archive_path, format!("{trimmed}\n"))
+        .with_context(|| format!("writing archived log to {}", archive_path.display()))?;
+    Ok(Some(archive_path))
 }
 
 fn format_bytes(n: u64) -> String {
@@ -443,6 +523,55 @@ fn resolve_latest(dest_root: &Path) -> Option<PathBuf> {
     entries.first().map(|e| e.path())
 }
 
+/// Delete all incremental snapshots under `dest_root`.
+fn prune_all_incrementals(dest_root: &Path, log: &mut fs::File) -> Result<()> {
+    let entries = match dest_root.read_dir() {
+        Ok(rd) => rd,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if !n.starts_with("inc-") || !entry.path().is_dir() {
+            continue;
+        }
+        try_remove_snapshot(&entry.path(), &n, log, "incremental snapshot");
+    }
+    Ok(())
+}
+
+/// Keep only the `keep` most recent full snapshots (0 = unlimited).
+fn apply_full_retention(dest_root: &Path, keep: u32, log: &mut fs::File) -> Result<()> {
+    if keep == 0 {
+        return Ok(());
+    }
+
+    let mut fulls: Vec<_> = match dest_root.read_dir() {
+        Ok(rd) => rd
+            .flatten()
+            .filter(|e| e.path().is_dir() && e.file_name().to_string_lossy().starts_with("full-"))
+            .map(|e| e.path())
+            .collect(),
+        Err(_) => return Ok(()),
+    };
+
+    fulls.sort_by_key(|p| std::cmp::Reverse(p.file_name().unwrap_or_default().to_os_string()));
+
+    for path in fulls
+        .into_iter()
+        .skip(usize::try_from(keep).unwrap_or(usize::MAX))
+    {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        try_remove_snapshot(&path, &name, log, "old full snapshot");
+    }
+    Ok(())
+}
+
 /// Delete incremental snapshots older than `retention_days`.
 fn apply_retention(dest_root: &Path, retention_days: u32, log: &mut fs::File) -> Result<()> {
     let cutoff = Local::now()
@@ -466,16 +595,7 @@ fn apply_retention(dest_root: &Path, retention_days: u32, log: &mut fs::File) ->
             continue;
         };
         if modified < cutoff_sys {
-            if let Err(e) = fs::remove_dir_all(entry.path()) {
-                let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-                let _ = writeln!(
-                    log,
-                    "[{ts}] WARNING: could not remove old snapshot {n}: {e}"
-                );
-            } else {
-                let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-                let _ = writeln!(log, "[{ts}] Retention: removed {n}");
-            }
+            try_remove_snapshot(&entry.path(), &n, log, "old snapshot");
         }
     }
     Ok(())
@@ -499,8 +619,8 @@ mod tests {
     /// Create a unique temp directory for a test and return its path.
     /// The caller is responsible for removing it afterwards.
     fn tmp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("backup-tool-test-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("backup-tool-test-{tag}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -676,7 +796,10 @@ mod tests {
             .open(&log_path)
             .unwrap();
         apply_retention(&dir, 0, &mut log).unwrap(); // retention_days = 0 → prune all old
-        assert!(full.exists(), "full-* snapshot must never be pruned by retention");
+        assert!(
+            full.exists(),
+            "full-* snapshot must never be pruned by retention"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -717,6 +840,103 @@ mod tests {
         apply_retention(&dir, 30, &mut log).unwrap();
         assert!(inc.exists(), "recent inc-* snapshot must not be pruned");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn prune_all_incrementals_removes_all_incs_keeps_fulls() {
+        let dir = tmp_dir("prune-all-inc");
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-02_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-03_120000");
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        prune_all_incrementals(&dir, &mut log).unwrap();
+
+        assert!(dir.join("full-2024-01-01_120000").exists());
+        assert!(!dir.join("inc-2024-01-02_120000").exists());
+        assert!(!dir.join("inc-2024-01-03_120000").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_full_retention_keeps_n_newest_fulls() {
+        let dir = tmp_dir("full-retention");
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        make_snapshot_dir(&dir, "full-2024-02-01_120000");
+        make_snapshot_dir(&dir, "full-2024-03-01_120000");
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        apply_full_retention(&dir, 2, &mut log).unwrap();
+
+        assert!(!dir.join("full-2024-01-01_120000").exists());
+        assert!(dir.join("full-2024-02-01_120000").exists());
+        assert!(dir.join("full-2024-03-01_120000").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_full_retention_zero_means_unlimited() {
+        let dir = tmp_dir("full-retention-unlimited");
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        make_snapshot_dir(&dir, "full-2024-02-01_120000");
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        apply_full_retention(&dir, 0, &mut log).unwrap();
+
+        assert!(dir.join("full-2024-01-01_120000").exists());
+        assert!(dir.join("full-2024-02-01_120000").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn archive_log_to_snapshot_copies_into_snapshot() {
+        let snapshot = tmp_dir("log-archive");
+        let active_log = snapshot.join("active.log");
+        fs::write(
+            &active_log,
+            "[2024-01-01] weekly log entry\n2024/01/01 rsync noise\n[2024-01-02] another entry\n",
+        )
+        .unwrap();
+
+        let archived = archive_log_to_snapshot(&active_log, &snapshot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived, snapshot.join(".backup-tool/backup.log"));
+        let text = fs::read_to_string(archived).unwrap();
+        assert!(text.contains("weekly log entry"));
+        assert!(text.contains("another entry"));
+        assert!(!text.contains("rsync noise"));
+        fs::remove_dir_all(&snapshot).unwrap();
+    }
+
+    #[test]
+    fn archive_log_to_snapshot_skips_missing_or_empty() {
+        let snapshot = tmp_dir("log-archive-empty");
+        let missing = snapshot.join("missing.log");
+        assert!(archive_log_to_snapshot(&missing, &snapshot)
+            .unwrap()
+            .is_none());
+
+        fs::write(&missing, "2024/01/01 only rsync lines\n").unwrap();
+        assert!(archive_log_to_snapshot(&missing, &snapshot)
+            .unwrap()
+            .is_none());
+        fs::remove_dir_all(&snapshot).unwrap();
     }
 }
 

@@ -8,6 +8,18 @@ use gtk4::{
 
 use crate::{config::Config, drives, systemd};
 
+type SchedulePageWidgets = (
+    GBox,
+    ComboBoxText,
+    SpinButton,
+    SpinButton,
+    SpinButton,
+    SpinButton,
+    SpinButton,
+    Rc<RefCell<bool>>,
+    ComboBoxText,
+);
+
 // ── Entry-point ───────────────────────────────────────────────────────────────
 
 /// Build and show the first-run install wizard.
@@ -75,8 +87,17 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
     let (p_source, source_entry) = build_source(Rc::clone(&cfg));
     let (p_drive, drive_drop, drive_dest_entry, refresh_btn) =
         build_drive(Rc::clone(&cfg), Rc::clone(&drives_state));
-    let (p_schedule, day_combo, hour_spin, min_spin, ret_spin, inc_spin, is_24h_sched, ampm_sched) =
-        build_schedule(Rc::clone(&cfg));
+    let (
+        p_schedule,
+        day_combo,
+        hour_spin,
+        min_spin,
+        keep_full_spin,
+        ret_spin,
+        inc_spin,
+        is_24h_sched,
+        ampm_sched,
+    ) = build_schedule(Rc::clone(&cfg));
     let (p_excludes, excludes_tv) = build_excludes(Rc::clone(&cfg));
     let (p_review, review_lbl) = build_review();
     let (p_done, done_lbl) = build_done();
@@ -192,6 +213,8 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
         #[strong]
         min_spin,
         #[strong]
+        keep_full_spin,
+        #[strong]
         ret_spin,
         #[strong]
         inc_spin,
@@ -244,11 +267,13 @@ pub fn show<F: Fn(Config) + 'static>(app: &gtk4::Application, on_done: F) {
                     let m = min_spin.value() as u8;
                     let ret = ret_spin.value() as u32;
                     let inc = inc_spin.value() as u32;
+                    let keep_full = keep_full_spin.value() as u32;
                     let mut c = cfg.borrow_mut();
                     c.full_backup_day = day;
                     c.backup_time = format!("{h:02}:{m:02}");
                     c.retention_days = ret;
                     c.incremental_every_n_days = inc;
+                    c.keep_full_snapshots = keep_full;
                 }
                 4 => {
                     // excludes page
@@ -502,19 +527,8 @@ fn h12_to_24h(h12: u8, pm: bool) -> u8 {
 }
 
 // Page 3 – Schedule
-// Returns: (page, day_combo, hour_spin, min_spin, ret_spin, inc_spin, is_24h, ampm_combo_time)
-fn build_schedule(
-    cfg: Rc<RefCell<Config>>,
-) -> (
-    GBox,
-    ComboBoxText,
-    SpinButton,
-    SpinButton,
-    SpinButton,
-    SpinButton,
-    Rc<RefCell<bool>>,
-    ComboBoxText,
-) {
+// Returns: (page, day_combo, hour_spin, min_spin, keep_full_spin, ret_spin, inc_spin, is_24h, ampm_combo_time)
+fn build_schedule(cfg: Rc<RefCell<Config>>) -> SchedulePageWidgets {
     let b = page_box();
     b.append(&section_label("Backup Schedule"));
 
@@ -617,7 +631,21 @@ fn build_schedule(
     }
 
     // Retention
-    b.append(&sub_label("Keep incremental snapshots for (days):"));
+    b.append(&sub_label("Keep full snapshots (0 = unlimited):"));
+    let adj_keep_full = gtk4::Adjustment::new(
+        f64::from(cfg.borrow().keep_full_snapshots),
+        0.0,
+        365.0,
+        1.0,
+        12.0,
+        0.0,
+    );
+    let keep_full_spin = SpinButton::new(Some(&adj_keep_full), 1.0, 0);
+    b.append(&keep_full_spin);
+
+    b.append(&sub_label(
+        "Orphan incremental safety retention (days, if full is delayed):",
+    ));
     let adj_ret = gtk4::Adjustment::new(
         f64::from(cfg.borrow().retention_days),
         1.0,
@@ -649,6 +677,7 @@ fn build_schedule(
         day_combo,
         hour_spin,
         min_spin,
+        keep_full_spin,
         ret_spin,
         inc_spin,
         is_24h_time,
@@ -751,6 +780,7 @@ fn build_review_text(cfg: &Config) -> String {
         7 => "weekly".to_string(),
         n => format!("every {n} days"),
     };
+    let keep_full = cfg.keep_full_snapshots_label();
     format!(
         "Source directory  : {}\n\
          Backup destination: {}\n\
@@ -759,7 +789,8 @@ fn build_review_text(cfg: &Config) -> String {
          Full backup day   : {}\n\
          Daily time        : {}\n\
          Incrementals      : {inc_desc}\n\
-         Retention         : {} days\n\
+         Full snapshots    : {keep_full}\n\
+         Inc safety        : {} days\n\
          Excludes          : {} patterns\n\n\
          What will be installed:\n\
          • ~/.config/systemd/user/backup-tool.service\n\
@@ -776,6 +807,8 @@ fn build_review_text(cfg: &Config) -> String {
         cfg.retention_days,
         cfg.excludes.len(),
         cfg.backup_time,
+        inc_desc = inc_desc,
+        keep_full = keep_full,
     )
 }
 
@@ -837,12 +870,14 @@ if the\n\
              • Full backup every {full_day}\n\
              • Incremental every other day\n\
              • Daily at {time}\n\
-             • Incrementals kept for {ret} days\n\n\
+             • Keep {keep_full} full snapshots\n\
+             • Orphan incrementals kept for {ret} days\n\n\
              You can now close this wizard.  The backup timer is active.",
             Config::config_path().display(),
             log,
             full_day = cfg.borrow().full_backup_day,
             time = cfg.borrow().backup_time,
+            keep_full = cfg.borrow().keep_full_snapshots_label(),
             ret = cfg.borrow().retention_days,
         ),
         Err(e) => format!(

@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use std::{path::{Path, PathBuf}, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::config::Config;
 
