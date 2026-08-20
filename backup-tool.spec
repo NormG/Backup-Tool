@@ -2,7 +2,7 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
-Version:        1.1.8
+Version:        0.1.8
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
@@ -142,8 +142,8 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
-* Thu Aug 20 2026 norm <norm@localhost> - 1.1.8-1
-- About tab: rename display title from Home Backup to Backup
+* Thu Aug 20 2026 norm <norm@localhost> - 0.1.8-1
+- About tab: display title GTK Backup Manager (app/window remains Backup-Tool)
 - Retention policy, log rotation, deferred-full state file, year-end reminder
 - 47 unit tests
 
