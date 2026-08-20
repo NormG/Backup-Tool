@@ -126,12 +126,18 @@ impl Config {
 
     /// Persist config to disk, creating parent directories as needed.
     pub fn save(&self) -> Result<()> {
+        let mut to_save = self.clone();
+        if let Ok(Some(on_disk)) = Self::load() {
+            to_save.pending_full_backup =
+                preserve_pending_full_backup(self.pending_full_backup, on_disk.pending_full_backup);
+        }
+
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating config dir {}", parent.display()))?;
         }
-        let raw = toml::to_string_pretty(self).context("serialising config to TOML")?;
+        let raw = toml::to_string_pretty(&to_save).context("serialising config to TOML")?;
         std::fs::write(&path, raw).with_context(|| format!("writing config {}", path.display()))?;
         Ok(())
     }
@@ -178,6 +184,10 @@ pub fn default_one() -> u32 {
 // Used by #[serde(default = "default_zero")] on Config::keep_full_snapshots.
 pub fn default_zero() -> u32 {
     0
+}
+
+fn preserve_pending_full_backup(in_memory: bool, on_disk: bool) -> bool {
+    in_memory || on_disk
 }
 
 #[cfg(test)]
@@ -311,5 +321,12 @@ installed = false
     #[test]
     fn default_zero_returns_zero() {
         assert_eq!(default_zero(), 0);
+    }
+
+    #[test]
+    fn preserve_pending_full_backup_keeps_disk_retry() {
+        assert!(preserve_pending_full_backup(false, true));
+        assert!(!preserve_pending_full_backup(false, false));
+        assert!(preserve_pending_full_backup(true, false));
     }
 }
