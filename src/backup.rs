@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use crate::{config::Config, drives};
+use crate::{config::Config, drives, pending_full};
 
 /// Which kind of snapshot to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +68,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
-                Config::set_pending_full_backup(true)?;
+                pending_full::set_pending_full_backup(true)?;
                 let msg = format!(
                     "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
                     format_bytes(available),
@@ -82,7 +82,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 BackupKind::Incremental
             }
             FullPrep::Blocked { available, needed } => {
-                Config::set_pending_full_backup(true)?;
+                pending_full::set_pending_full_backup(true)?;
                 return Ok(format!(
                     "Full backup blocked: need {} free but only {} available.\n\
                      Free space on the backup drive or remove old full-* snapshots, then retry.",
@@ -214,7 +214,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        Config::set_pending_full_backup(false)?;
+        pending_full::set_pending_full_backup(false)?;
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
@@ -455,7 +455,15 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
-    if config.pending_full_backup {
+    auto_kind_with_pending(
+        config,
+        dest_root,
+        pending_full::pending_full_backup().unwrap_or(false),
+    )
+}
+
+fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool) -> BackupKind {
+    if pending_full {
         return BackupKind::Full;
     }
 
@@ -734,10 +742,9 @@ mod tests {
 
         let cfg = Config {
             full_backup_day: "Neverday".to_string(),
-            pending_full_backup: true,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Full);
+        assert_eq!(auto_kind_with_pending(&cfg, &dir, true), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 

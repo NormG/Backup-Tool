@@ -217,8 +217,7 @@ fn wire_backup_btn(
         move |b| {
             b.set_sensitive(false);
             result_lbl.set_text("⏳  Running backup — please wait…");
-            let mut c = cfg.borrow().clone();
-            let _ = Config::refresh_pending_full_from_disk(&mut c);
+            let c = cfg.borrow().clone();
 
             // Spawn the blocking backup on a background thread.
             // Communicate the result back to the main thread via Arc<Mutex>.
@@ -238,14 +237,9 @@ fn wire_backup_btn(
                     result_lbl,
                     #[strong]
                     b,
-                    #[strong]
-                    cfg,
                     move || {
                         let mut guard = result.lock().unwrap();
                         if let Some(res) = guard.take() {
-                            if let Ok(mut live) = cfg.try_borrow_mut() {
-                                let _ = Config::refresh_pending_full_from_disk(&mut live);
-                            }
                             match res {
                                 Ok(s) => result_lbl.set_text(&s),
                                 Err(e) => {
@@ -503,9 +497,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
                 c.keep_full_snapshots = keep_full;
             }
             match cfg.borrow().save() {
-                Ok(()) => {
-                    let _ = Config::refresh_pending_full_from_disk(&mut cfg.borrow_mut());
-                }
+                Ok(()) => {}
                 Err(e) => {
                     save_lbl.set_text(&format!("❌ Save failed: {e}"));
                     return;
@@ -596,10 +588,7 @@ fn build_excludes(cfg: Rc<RefCell<Config>>) -> GBox {
                 .collect();
             cfg.borrow_mut().excludes = excl;
             match cfg.borrow().save() {
-                Ok(()) => {
-                    let _ = Config::refresh_pending_full_from_disk(&mut cfg.borrow_mut());
-                    save_lbl.set_text("✅  Excludes saved.");
-                }
+                Ok(()) => save_lbl.set_text("✅  Excludes saved."),
                 Err(e) => save_lbl.set_text(&format!("❌  Save failed: {e}")),
             }
         });
@@ -751,10 +740,7 @@ fn build_settings(cfg: Rc<RefCell<Config>>) -> GBox {
                 c.dest_dir = new_dest;
             }
             match cfg.borrow().save() {
-                Ok(()) => {
-                    let _ = Config::refresh_pending_full_from_disk(&mut cfg.borrow_mut());
-                    save_lbl.set_text("✅  Paths saved.");
-                }
+                Ok(()) => save_lbl.set_text("✅  Paths saved."),
                 Err(e) => save_lbl.set_text(&format!("❌  {e}")),
             }
         });
