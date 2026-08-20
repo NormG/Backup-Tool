@@ -68,7 +68,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
-                pending_full::set_pending_full_backup(true)?;
+                if let Err(e) = pending_full::set_pending_full_backup(true) {
+                    eprintln!(
+                        "WARNING: could not persist deferred-full retry state: {e}; \
+                         continuing with incremental fallback"
+                    );
+                }
                 let msg = format!(
                     "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
                     format_bytes(available),
@@ -82,7 +87,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 BackupKind::Incremental
             }
             FullPrep::Blocked { available, needed } => {
-                pending_full::set_pending_full_backup(true)?;
+                let _ = pending_full::set_pending_full_backup(true);
                 return Ok(format!(
                     "Full backup blocked: need {} free but only {} available.\n\
                      Free space on the backup drive or remove old full-* snapshots, then retry.",
@@ -204,8 +209,14 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 &mut log_file,
                 &format!("WARNING: log rotation failed (backup succeeded): {e}"),
             );
+        } else if let Ok(fresh) = open_log_append(&Config::log_path()) {
+            log_file = fresh;
         } else {
-            log_file = open_log_append(&Config::log_path())?;
+            log_line(
+                &mut log_file,
+                "WARNING: could not reopen log after rotation (backup succeeded); \
+                 continuing with existing handle",
+            );
         }
     }
 
