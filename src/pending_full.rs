@@ -114,29 +114,29 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
-/// Pending flag for auto mode. Uses retry marker as fallback when toml is missing
-/// or unreadable so automatic backups keep running without losing deferred retries.
+/// Pending flag for auto mode. Uses retry marker and backup.log as fallbacks
+/// when pending-full.toml is missing or unreadable.
 pub fn pending_full_for_auto() -> Result<bool> {
     if retry_marker_path().exists() {
         return Ok(true);
     }
-    if !PendingFullState::path().exists() {
-        return Ok(false);
-    }
-    match pending_full_backup() {
-        Ok(pending) => Ok(pending),
-        Err(e) => {
-            eprintln!(
-                "WARNING: pending-full.toml unreadable ({e}); \
-                 checking retry marker and backup log"
-            );
-            let from_log = log_indicates_deferred_full();
-            if !from_log {
-                let _ = fs::remove_file(PendingFullState::path());
+    if PendingFullState::path().exists() {
+        match pending_full_backup() {
+            Ok(pending) => return Ok(pending),
+            Err(e) => {
+                eprintln!(
+                    "WARNING: pending-full.toml unreadable ({e}); \
+                     checking backup log"
+                );
+                let from_log = log_indicates_deferred_full();
+                if !from_log {
+                    let _ = fs::remove_file(PendingFullState::path());
+                }
+                return Ok(from_log);
             }
-            Ok(from_log)
         }
     }
+    Ok(log_indicates_deferred_full())
 }
 
 const PERSIST_ATTEMPTS: u32 = 3;
