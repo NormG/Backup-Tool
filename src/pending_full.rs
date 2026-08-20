@@ -50,28 +50,9 @@ impl PendingFullState {
     }
 }
 
-/// Fallback marker when pending-full.toml cannot be written.
+/// Durable marker written alongside pending-full.toml.
 fn retry_marker_path() -> PathBuf {
     Config::data_dir().join("pending-full.retry")
-}
-
-/// Last-resort signal when both toml and marker are unavailable.
-fn log_indicates_deferred_full() -> bool {
-    let path = Config::log_path();
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return false;
-    };
-    let mut saw_defer = false;
-    for line in raw.lines().rev().take(300) {
-        if line.contains("Completed full snapshot") {
-            break;
-        }
-        if line.contains("Full backup deferred") {
-            saw_defer = true;
-            break;
-        }
-    }
-    saw_defer
 }
 
 fn set_retry_marker(pending: bool) -> Result<()> {
@@ -92,6 +73,18 @@ fn set_retry_marker(pending: bool) -> Result<()> {
     }
 }
 
+fn quarantine_corrupt_toml() -> Result<()> {
+    let path = PendingFullState::path();
+    if !path.exists() {
+        return Ok(());
+    }
+    let bad = path.with_extension("toml.corrupt");
+    if bad.exists() {
+        fs::remove_file(&bad)?;
+    }
+    fs::rename(&path, &bad).with_context(|| format!("quarantining {}", path.display()))
+}
+
 fn with_lock<R>(f: impl FnOnce() -> Result<R>) -> Result<R> {
     let lock_path = PendingFullState::lock_path();
     if let Some(parent) = lock_path.parent() {
@@ -110,51 +103,52 @@ fn with_lock<R>(f: impl FnOnce() -> Result<R>) -> Result<R> {
     result
 }
 
-pub fn pending_full_backup() -> Result<bool> {
-    with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
-}
-
-/// Pending flag for auto mode. Uses retry marker and backup.log as fallbacks
-/// when pending-full.toml is missing or unreadable.
-pub fn pending_full_for_auto() -> Result<bool> {
-    if retry_marker_path().exists() {
-        return Ok(true);
-    }
-    if PendingFullState::path().exists() {
-        match pending_full_backup() {
-            Ok(pending) => return Ok(pending),
-            Err(e) => {
-                eprintln!(
-                    "WARNING: pending-full.toml unreadable ({e}); \
-                     checking backup log"
-                );
-                let from_log = log_indicates_deferred_full();
-                if !from_log {
-                    let _ = fs::remove_file(PendingFullState::path());
-                }
-                return Ok(from_log);
-            }
-        }
-    }
-    Ok(log_indicates_deferred_full())
-}
-
-const PERSIST_ATTEMPTS: u32 = 3;
-
 fn persist_pending(pending: bool) -> Result<()> {
     with_lock(|| {
-        if pending {
-            let mut state = PendingFullState::load().unwrap_or_default();
-            state.pending_full_backup = true;
-            state.save()?;
-        } else {
-            PendingFullState::default().save()?;
+        PendingFullState {
+            pending_full_backup: pending,
         }
+        .save()?;
         set_retry_marker(pending)
     })
 }
 
-/// Persist deferred-full state with brief retries and a marker-file fallback.
+const PERSIST_ATTEMPTS: u32 = 3;
+
+pub fn pending_full_backup() -> Result<bool> {
+    with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
+}
+
+/// Whether auto mode should retry a deferred full (toml or marker).
+pub fn pending_full_for_auto() -> Result<bool> {
+    if retry_marker_path().exists() {
+        return Ok(true);
+    }
+    if !PendingFullState::path().exists() {
+        return Ok(false);
+    }
+    match pending_full_backup() {
+        Ok(pending) => Ok(pending),
+        Err(e) => {
+            quarantine_corrupt_toml()?;
+            if retry_marker_path().exists() {
+                Ok(true)
+            } else {
+                Err(e).with_context(|| {
+                    "pending-full.toml is unreadable and no retry marker exists; \
+                     repair or remove the quarantined file"
+                })
+            }
+        }
+    }
+}
+
+/// Clear pending retry state at the start of a claimed full backup.
+pub fn claim_pending_full() -> Result<()> {
+    persist_pending(false)
+}
+
+/// Persist deferred-full state with brief retries and marker fallback.
 pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
     let mut last_err = None;
     for attempt in 0..PERSIST_ATTEMPTS {
@@ -181,23 +175,80 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
     }
 }
 
+#[allow(dead_code)]
 pub fn set_pending_full_backup(pending: bool) -> Result<()> {
     set_pending_full_backup_with_retry(pending)
 }
 
 /// Clear all deferred-full signals after a successful full backup.
 pub fn clear_pending_after_success() -> Result<()> {
-    let r1 = set_pending_full_backup_with_retry(false);
-    let r2 = set_retry_marker(false);
-    r1.and(r2)
+    set_pending_full_backup_with_retry(false)
+}
+
+/// Restores pending-full retry if a claimed full backup fails before completion.
+#[derive(Default)]
+pub(crate) struct PendingRestoreGuard {
+    active: bool,
+}
+
+impl PendingRestoreGuard {
+    pub fn arm() -> Self {
+        Self { active: true }
+    }
+
+    pub fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for PendingRestoreGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = set_pending_full_backup_with_retry(true);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn with_temp_data<R>(f: impl FnOnce(&PathBuf) -> R) -> R {
+        let dir = std::env::temp_dir().join(format!(
+            "backup-tool-pending-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("BACKUP_TOOL_DATA_DIR", &dir);
+        let result = f(&dir);
+        std::env::remove_var("BACKUP_TOOL_DATA_DIR");
+        let _ = fs::remove_dir_all(dir);
+        result
+    }
 
     #[test]
     fn default_pending_state_is_false() {
         assert!(!PendingFullState::default().pending_full_backup);
+    }
+
+    #[test]
+    fn persist_and_read_round_trip() {
+        with_temp_data(|_| {
+            set_pending_full_backup_with_retry(true).unwrap();
+            assert!(pending_full_for_auto().unwrap());
+            claim_pending_full().unwrap();
+            assert!(!pending_full_for_auto().unwrap());
+        });
+    }
+
+    #[test]
+    fn marker_survives_corrupt_toml() {
+        with_temp_data(|_| {
+            fs::write(PendingFullState::path(), "not valid toml {{{").unwrap();
+            set_retry_marker(true).unwrap();
+            assert!(pending_full_for_auto().unwrap());
+        });
     }
 }

@@ -6,6 +6,7 @@ use std::{
     os::unix::fs as unix_fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use crate::{config::Config, drives, pending_full, run_lock};
@@ -42,31 +43,35 @@ impl std::str::FromStr for BackupKind {
 ///
 /// Returns a human-readable summary suitable for display in the GUI.
 pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
-    let _run_lock = match run_lock::RunLock::try_acquire()? {
-        Some(lock) => lock,
-        None => {
-            if matches!(kind, BackupKind::Auto) && scheduled_full_missed(config) {
-                let log_path = Config::log_path();
-                if let Ok(mut log) = open_log_append(&log_path) {
-                    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-                    let _ = writeln!(
-                        log,
-                        "[{ts}] Full backup deferred — another backup is already in progress; will retry full on next run."
-                    );
-                }
+    let _run_lock = match kind {
+        BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(7200))? {
+            Some(lock) => lock,
+            None => {
+                anyhow::bail!(
+                    "Timed out after 2 hours waiting for an in-progress backup to finish"
+                );
             }
-            return Ok(
-                "Backup skipped: another backup is already in progress.".to_string(),
-            );
-        }
+        },
+        _ => match run_lock::RunLock::try_acquire()? {
+            Some(lock) => lock,
+            None => {
+                return Ok(
+                    "Backup skipped: another backup is already in progress.".to_string(),
+                );
+            }
+        },
     };
+
+    let mut pending_restore = pending_full::PendingRestoreGuard::default();
 
     // ── 1. Ensure the destination directory is reachable ──────────────────
     let dest_root = resolve_dest(config)?;
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
+    let pending_retry = matches!(kind, BackupKind::Auto)
+        && pending_full::pending_full_for_auto()?;
     let effective_kind = match kind {
-        BackupKind::Auto => auto_kind(config, &dest_root)?,
+        BackupKind::Auto => auto_kind(config, &dest_root, pending_retry)?,
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
         }
@@ -80,6 +85,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         return Ok(msg);
     }
 
+    if effective_kind == BackupKind::Full && pending_retry {
+        pending_full::claim_pending_full()?;
+        pending_restore = pending_full::PendingRestoreGuard::arm();
+    }
+
     // ── 2b. Full backup: prune first, then verify there is room ───────────
     let mut deferred_full = false;
     let effective_kind = if effective_kind == BackupKind::Full {
@@ -87,6 +97,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
+                pending_full::set_pending_full_backup_with_retry(true)?;
                 let msg = format!(
                     "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
                     format_bytes(available),
@@ -96,12 +107,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 if let Ok(mut log) = open_log_append(&log_path) {
                     let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
                     let _ = writeln!(log, "[{ts}] {msg}");
-                }
-                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
-                    eprintln!(
-                        "WARNING: could not persist deferred-full retry state: {e}; \
-                         retry will rely on backup.log until state is saved"
-                    );
                 }
                 BackupKind::Incremental
             }
@@ -249,11 +254,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             log_line(
                 &mut log_file,
                 &format!(
-                    "WARNING: could not fully clear deferred-full retry state \
-                     (backup succeeded; next auto run may repeat this full): {e}"
+                    "WARNING: could not clear deferred-full retry state after successful full: {e}"
                 ),
             );
         }
+        pending_restore.disarm();
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
@@ -491,21 +496,10 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
     )
 }
 
-/// Returns true when auto mode should treat today as a missed or pending full.
-fn scheduled_full_missed(config: &Config) -> bool {
-    let today = Local::now().format("%A").to_string();
-    let is_full_day = today.eq_ignore_ascii_case(&config.full_backup_day);
-    is_full_day || pending_full::pending_full_for_auto().unwrap_or(false)
-}
-
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
-fn auto_kind(config: &Config, dest_root: &Path) -> Result<BackupKind> {
-    Ok(auto_kind_with_pending(
-        config,
-        dest_root,
-        pending_full::pending_full_for_auto()?,
-    ))
+fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
+    Ok(auto_kind_with_pending(config, dest_root, pending_retry))
 }
 
 fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool) -> BackupKind {
@@ -804,7 +798,7 @@ mod tests {
             full_backup_day: "Neverday".to_string(), // won't match any real weekday
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Full);
+        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -825,7 +819,7 @@ mod tests {
             incremental_every_n_days: 1,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Skip);
+        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Skip);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -844,7 +838,7 @@ mod tests {
             incremental_every_n_days: 1,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Incremental);
+        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Incremental);
         fs::remove_dir_all(&dir).unwrap();
     }
 

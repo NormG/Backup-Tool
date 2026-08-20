@@ -7,6 +7,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     path::PathBuf,
+    time::{Duration, Instant},
 };
 
 use crate::config::Config;
@@ -21,20 +22,37 @@ impl RunLock {
         Config::data_dir().join("backup.run.lock")
     }
 
-    /// Returns `None` when another process already holds the run lock.
-    pub fn try_acquire() -> Result<Option<Self>> {
+    fn open_lock_file() -> Result<File> {
         fs::create_dir_all(Config::data_dir())?;
-        let path = Self::path();
-        let file = OpenOptions::new()
+        OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&path)
-            .with_context(|| format!("opening run lock {}", path.display()))?;
+            .open(Self::path())
+            .with_context(|| format!("opening run lock {}", Self::path().display()))
+    }
+
+    /// Returns `None` when another process already holds the run lock.
+    pub fn try_acquire() -> Result<Option<Self>> {
+        let file = Self::open_lock_file()?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { _file: file })),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e).with_context(|| "locking backup run"),
+        }
+    }
+
+    /// Wait up to `timeout` for the run lock (used by scheduled auto backups).
+    pub fn acquire_wait(timeout: Duration) -> Result<Option<Self>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(lock) = Self::try_acquire()? {
+                return Ok(Some(lock));
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_secs(5));
         }
     }
 }

@@ -85,6 +85,9 @@ impl Config {
 
     /// Returns the path to the data directory (logs, exclude lists, etc.).
     pub fn data_dir() -> PathBuf {
+        if let Ok(dir) = std::env::var("BACKUP_TOOL_DATA_DIR") {
+            return PathBuf::from(dir);
+        }
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from(".local/share"))
             .join("backup-tool")
