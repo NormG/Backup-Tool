@@ -124,15 +124,12 @@ impl Config {
         Ok(Some(cfg))
     }
 
-    /// Persist config to disk, creating parent directories as needed.
-    ///
-    /// GUI saves merge `pending_full_backup` with the on-disk value so a stale
-    /// in-memory copy cannot clear a retry written by a headless backup run.
+    /// GUI saves take the on-disk `pending_full_backup` value so headless backup
+    /// runs remain the source of truth for deferred-full retry state.
     pub fn save(&self) -> Result<()> {
         let mut to_save = self.clone();
         if let Ok(Some(on_disk)) = Self::load() {
-            to_save.pending_full_backup =
-                preserve_pending_full_backup(self.pending_full_backup, on_disk.pending_full_backup);
+            to_save.pending_full_backup = on_disk.pending_full_backup;
         }
         Self::write_config(&to_save)
     }
@@ -166,6 +163,14 @@ impl Config {
         }
     }
 
+    /// Reload deferred-full retry state from disk into an in-memory copy.
+    pub fn refresh_pending_full_from_disk(cfg: &mut Config) -> Result<()> {
+        if let Some(disk) = Self::load()? {
+            cfg.pending_full_backup = disk.pending_full_backup;
+        }
+        Ok(())
+    }
+
     /// Persist `pending_full_backup` so deferred fulls are retried on later runs.
     pub fn set_pending_full_backup(pending: bool) -> Result<()> {
         let mut cfg = Self::load()?.with_context(|| {
@@ -190,10 +195,6 @@ pub fn default_one() -> u32 {
 // Used by #[serde(default = "default_zero")] on Config::keep_full_snapshots.
 pub fn default_zero() -> u32 {
     0
-}
-
-fn preserve_pending_full_backup(in_memory: bool, on_disk: bool) -> bool {
-    in_memory || on_disk
 }
 
 #[cfg(test)]
@@ -327,12 +328,5 @@ installed = false
     #[test]
     fn default_zero_returns_zero() {
         assert_eq!(default_zero(), 0);
-    }
-
-    #[test]
-    fn preserve_pending_full_backup_keeps_disk_retry() {
-        assert!(preserve_pending_full_backup(false, true));
-        assert!(!preserve_pending_full_backup(false, false));
-        assert!(preserve_pending_full_backup(true, false));
     }
 }
