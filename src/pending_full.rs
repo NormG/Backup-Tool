@@ -133,11 +133,10 @@ pub fn pending_full_for_auto() -> Result<bool> {
         match pending_full_backup() {
             Ok(false) => {
                 if retry_marker_path().exists() {
-                    // Marker-only fallback while stale toml still says false.
                     persist_pending(true)?;
                     return Ok(true);
                 }
-                Ok(false)
+                return Ok(false);
             }
             Ok(true) => return Ok(true),
             Err(e) => {
