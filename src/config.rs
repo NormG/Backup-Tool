@@ -125,19 +125,25 @@ impl Config {
     }
 
     /// Persist config to disk, creating parent directories as needed.
+    ///
+    /// GUI saves merge `pending_full_backup` with the on-disk value so a stale
+    /// in-memory copy cannot clear a retry written by a headless backup run.
     pub fn save(&self) -> Result<()> {
         let mut to_save = self.clone();
         if let Ok(Some(on_disk)) = Self::load() {
             to_save.pending_full_backup =
                 preserve_pending_full_backup(self.pending_full_backup, on_disk.pending_full_backup);
         }
+        Self::write_config(&to_save)
+    }
 
+    fn write_config(cfg: &Self) -> Result<()> {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating config dir {}", parent.display()))?;
         }
-        let raw = toml::to_string_pretty(&to_save).context("serialising config to TOML")?;
+        let raw = toml::to_string_pretty(cfg).context("serialising config to TOML")?;
         std::fs::write(&path, raw).with_context(|| format!("writing config {}", path.display()))?;
         Ok(())
     }
@@ -172,7 +178,7 @@ impl Config {
             return Ok(());
         }
         cfg.pending_full_backup = pending;
-        cfg.save()
+        Self::write_config(&cfg)
     }
 }
 
