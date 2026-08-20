@@ -29,9 +29,14 @@ pub struct Config {
     pub incremental_every_n_days: u32,
     /// How many full snapshots to keep on the backup drive (0 = unlimited).
     /// When a new full succeeds, older full-* directories beyond this count
-    /// are deleted automatically.
-    #[serde(default = "default_twelve")]
+    /// are deleted automatically.  Omitted in legacy configs defaults to 0
+    /// (unlimited); new installs via the wizard use 12.
+    #[serde(default = "default_zero")]
     pub keep_full_snapshots: u32,
+    /// Set when a scheduled full was deferred for lack of space; auto mode
+    /// retries a full on subsequent runs until one succeeds.
+    #[serde(default)]
+    pub pending_full_backup: bool,
     /// True after a successful first install so the wizard is not shown again.
     pub installed: bool,
 }
@@ -68,6 +73,7 @@ impl Default for Config {
             retention_days: 30,
             incremental_every_n_days: 1,
             keep_full_snapshots: 12,
+            pending_full_backup: false,
             installed: false,
         }
     }
@@ -147,6 +153,21 @@ impl Config {
             self.keep_full_snapshots.to_string()
         }
     }
+
+    /// Persist `pending_full_backup` so deferred fulls are retried on later runs.
+    pub fn set_pending_full_backup(pending: bool) -> Result<()> {
+        let mut cfg = Self::load()?.with_context(|| {
+            format!(
+                "loading config to update pending_full_backup ({})",
+                Self::config_path().display()
+            )
+        })?;
+        if cfg.pending_full_backup == pending {
+            return Ok(());
+        }
+        cfg.pending_full_backup = pending;
+        cfg.save()
+    }
 }
 
 // Used by #[serde(default = "default_one")] on Config::incremental_every_n_days.
@@ -154,9 +175,9 @@ pub fn default_one() -> u32 {
     1
 }
 
-// Used by #[serde(default = "default_twelve")] on Config::keep_full_snapshots.
-pub fn default_twelve() -> u32 {
-    12
+// Used by #[serde(default = "default_zero")] on Config::keep_full_snapshots.
+pub fn default_zero() -> u32 {
+    0
 }
 
 #[cfg(test)]
@@ -225,6 +246,7 @@ mod tests {
             retention_days: 14,
             incremental_every_n_days: 2,
             keep_full_snapshots: 6,
+            pending_full_backup: true,
             installed: true,
         };
         let toml_str = toml::to_string_pretty(&original).unwrap();
@@ -243,6 +265,7 @@ mod tests {
             original.incremental_every_n_days
         );
         assert_eq!(restored.keep_full_snapshots, original.keep_full_snapshots);
+        assert_eq!(restored.pending_full_backup, original.pending_full_backup);
         assert_eq!(restored.installed, original.installed);
     }
 
@@ -274,10 +297,11 @@ installed = false
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.incremental_every_n_days, 1);
-        assert_eq!(cfg.keep_full_snapshots, 12);
+        assert_eq!(cfg.keep_full_snapshots, 0);
+        assert!(!cfg.pending_full_backup);
     }
 
-    // ── default_one ───────────────────────────────────────────────────────────
+    // ── default_one / default_zero ────────────────────────────────────────────
 
     #[test]
     fn default_one_returns_one() {
@@ -285,7 +309,7 @@ installed = false
     }
 
     #[test]
-    fn default_twelve_returns_twelve() {
-        assert_eq!(default_twelve(), 12);
+    fn default_zero_returns_zero() {
+        assert_eq!(default_zero(), 0);
     }
 }

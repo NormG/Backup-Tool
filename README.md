@@ -21,7 +21,8 @@ hardlinked so they consume no extra disk space.
   the next full backup succeeds; orphaned incrementals older than
   `retention_days` are pruned as a safety net if a full is delayed
 - **Full snapshot limit** — keep the newest `keep_full_snapshots` full backups
-  (default 12); set to `0` for unlimited
+  (wizard default 12; `0` = unlimited).  Legacy configs without this field keep
+  all full snapshots until you set a limit in the Schedule tab.
 - **Exclude patterns** — editable per-line list stored in the config file;
   defaults exclude caches, trash, disc images, and browser data
 - **Systemd user timer** — fully user-level (no root, no cron); survives reboots
@@ -264,8 +265,9 @@ share disk blocks with the full (or previous incremental) they were derived from
 - **Incrementals reset on each full** — when a full backup succeeds, all
   `inc-*` snapshots from the previous cycle are deleted automatically.
 - **Full snapshot limit** — only the newest `keep_full_snapshots` full backups
-  are kept (default 12, e.g. one year of monthly fulls).  Set to `0` to keep
-  all full snapshots.
+  are kept when set to a positive number (wizard default 12).  Set to `0` to
+  keep all full snapshots.  Upgraded configs omit this field until you save a
+  limit from the Schedule tab.
 - **Orphan incrementals** — if a scheduled full is delayed, incrementals older
   than `retention_days` are removed as a safety net.
 - **Weekly log rotation** — on each successful full backup, operational log

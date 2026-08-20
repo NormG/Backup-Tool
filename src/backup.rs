@@ -68,8 +68,9 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
+                Config::set_pending_full_backup(true)?;
                 let msg = format!(
-                    "Full backup deferred ({} free, {} needed) — running incremental instead.",
+                    "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
                     format_bytes(available),
                     format_bytes(needed)
                 );
@@ -81,9 +82,10 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 BackupKind::Incremental
             }
             FullPrep::Blocked { available, needed } => {
+                Config::set_pending_full_backup(true)?;
                 return Ok(format!(
-                    "Full backup deferred: need {} free but only {} available.\n\
-                     Old incrementals were pruned; remove old full-* snapshots or free space on the drive.",
+                    "Full backup blocked: need {} free but only {} available.\n\
+                     Free space on the backup drive or remove old full-* snapshots, then retry.",
                     format_bytes(needed),
                     format_bytes(available)
                 ));
@@ -212,6 +214,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
+        Config::set_pending_full_backup(false)?;
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
@@ -226,9 +229,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     // Build summary string for the GUI.
     let mut summary = build_summary(prefix, &final_dir, &stdout);
     if deferred_full {
-        summary = format!(
-            "⚠️  Scheduled full backup deferred (insufficient space after pruning).\n\n{summary}"
-        );
+        summary = format!("⚠️  Scheduled full backup deferred (insufficient space).\n\n{summary}");
     }
     Ok(summary)
 }
@@ -244,8 +245,8 @@ enum FullPrep {
     Blocked { available: u64, needed: u64 },
 }
 
-/// Before a full backup: check free space, then prune incrementals only when
-/// the full will actually proceed (not when deferring to incremental).
+/// Before a full backup: verify the drive has enough free space.  Incrementals
+/// are removed only after the full succeeds — never during preparation.
 fn prepare_full_backup(_config: &Config, dest_root: &Path) -> Result<FullPrep> {
     let log_path = Config::log_path();
     let mut log = open_log_append(&log_path)?;
@@ -257,11 +258,10 @@ fn prepare_full_backup(_config: &Config, dest_root: &Path) -> Result<FullPrep> {
     if available >= needed {
         writeln!(
             log,
-            "[{ts}] Space check passed: {} free, {} required — removing incrementals from previous cycle",
+            "[{ts}] Space check passed: {} free, {} required",
             format_bytes(available),
             format_bytes(needed)
         )?;
-        prune_all_incrementals(dest_root, &mut log)?;
         return Ok(FullPrep::Proceed);
     }
 
@@ -455,6 +455,10 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
+    if config.pending_full_backup {
+        return BackupKind::Full;
+    }
+
     let today = Local::now().format("%A").to_string(); // "Monday", "Tuesday", …
     let is_full_day = today.eq_ignore_ascii_case(&config.full_backup_day);
 
@@ -721,6 +725,21 @@ mod tests {
     }
 
     // ── auto_kind ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn auto_kind_full_when_pending_full_backup() {
+        let dir = tmp_dir("auto-pending-full");
+        make_snapshot_dir(&dir, "full-2020-01-01_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-01_120000");
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            pending_full_backup: true,
+            ..Config::default()
+        };
+        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Full);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn auto_kind_full_when_no_full_snapshot_exists() {
