@@ -4,7 +4,7 @@ use std::{
     process::Command,
 };
 
-use crate::config::Config;
+use crate::{backup, config::Config};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -141,6 +141,7 @@ fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
          SyslogIdentifier={app}\n\
          StandardOutput=journal\n\
          StandardError=journal\n\
+         TimeoutStartSec={timeout_start}\n\
          TimeoutStopSec=3600\n\
          \n\
          [Install]\n\
@@ -148,6 +149,7 @@ fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
         data_dir = Config::data_dir().display(),
         bin = bin,
         app = APP_ID,
+        timeout_start = backup::SYSTEMD_SERVICE_TIMEOUT_START_SECS,
     );
     let svc_path = sd_dir.join(SERVICE);
     std::fs::write(&svc_path, &svc).with_context(|| format!("writing {}", svc_path.display()))?;

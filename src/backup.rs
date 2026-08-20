@@ -39,6 +39,13 @@ impl std::str::FromStr for BackupKind {
     }
 }
 
+/// Max time an automatic backup waits for an in-progress run. Must stay below
+/// the systemd `TimeoutStartSec` in the service unit.
+const AUTO_LOCK_WAIT_SECS: u64 = 7200;
+
+/// systemd `[Service]` TimeoutStartSec — must exceed [`AUTO_LOCK_WAIT_SECS`].
+pub(crate) const SYSTEMD_SERVICE_TIMEOUT_START_SECS: u64 = AUTO_LOCK_WAIT_SECS + 1800;
+
 /// Run a backup, appending progress to the application log.
 ///
 /// Returns a human-readable summary suitable for display in the GUI.
@@ -47,7 +54,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         && (is_full_backup_day(config) || pending_full::pending_full_for_auto()?);
 
     let _run_lock = match kind {
-        BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(7200))? {
+        BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(AUTO_LOCK_WAIT_SECS))? {
             Some(lock) => lock,
             None => {
                 if preserve_full_on_lock_timeout {
@@ -56,7 +63,8 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                     })?;
                 }
                 anyhow::bail!(
-                    "Timed out after 2 hours waiting for an in-progress backup to finish"
+                    "Timed out after {} hours waiting for an in-progress backup to finish",
+                    AUTO_LOCK_WAIT_SECS / 3600
                 );
             }
         },
@@ -501,6 +509,20 @@ fn is_full_backup_day(config: &Config) -> bool {
     today.eq_ignore_ascii_case(&config.full_backup_day)
 }
 
+fn full_snapshot_exists_today(dest_root: &Path) -> bool {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    dest_root
+        .read_dir()
+        .map(|rd| {
+            rd.flatten().any(|e| {
+                let file_name = e.file_name();
+                let name = file_name.to_string_lossy();
+                name.starts_with("full-") && name.contains(&today)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
@@ -523,7 +545,11 @@ fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool)
         })
         .unwrap_or(false);
 
-    if is_full_day || !full_exists {
+    if !full_exists {
+        return BackupKind::Full;
+    }
+
+    if is_full_day && !full_snapshot_exists_today(dest_root) {
         return BackupKind::Full;
     }
 
