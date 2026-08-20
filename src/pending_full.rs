@@ -69,19 +69,32 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
-/// Pending flag for auto mode. Returns `false` when the state file cannot be
-/// read so automatic runs follow the normal schedule instead of forcing full.
-pub fn pending_full_for_auto() -> bool {
-    match pending_full_backup() {
-        Ok(pending) => pending,
-        Err(e) => {
-            eprintln!(
-                "WARNING: could not read pending-full.toml ({e}); \
-                 using normal backup schedule"
-            );
-            false
+/// Pending flag for auto mode. Missing state file means no retry is queued;
+/// an existing but unreadable file fails so auto mode does not guess.
+pub fn pending_full_for_auto() -> Result<bool> {
+    if !PendingFullState::path().exists() {
+        return Ok(false);
+    }
+    pending_full_backup()
+}
+
+const PERSIST_ATTEMPTS: u32 = 3;
+
+/// Persist deferred-full state with brief retries for transient I/O errors.
+pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
+    let mut last_err = None;
+    for attempt in 0..PERSIST_ATTEMPTS {
+        match set_pending_full_backup(pending) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < PERSIST_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
         }
     }
+    Err(last_err.expect("retry loop always records at least one error"))
 }
 
 pub fn set_pending_full_backup(pending: bool) -> Result<()> {

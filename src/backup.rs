@@ -56,7 +56,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
     let effective_kind = match kind {
-        BackupKind::Auto => auto_kind(config, &dest_root),
+        BackupKind::Auto => auto_kind(config, &dest_root)?,
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
         }
@@ -77,7 +77,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
-                if let Err(e) = pending_full::set_pending_full_backup(true) {
+                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
                     eprintln!(
                         "WARNING: could not persist deferred-full retry state: {e}; \
                          continuing with incremental fallback"
@@ -96,18 +96,18 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 BackupKind::Incremental
             }
             FullPrep::Blocked { available, needed } => {
-                let persist_warn = pending_full::set_pending_full_backup(true)
-                    .err()
-                    .map(|e| {
-                        format!(
-                            "\n\n⚠️  Could not persist deferred-full retry state ({e}); \
-                             the next automatic run may not retry this full."
-                        )
-                    })
-                    .unwrap_or_default();
+                if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
+                    anyhow::bail!(
+                        "Full backup blocked: need {} free but only {} available.\n\
+                         Free space on the backup drive or remove old full-* snapshots, then retry.\n\
+                         Could not persist deferred-full retry state: {e}",
+                        format_bytes(needed),
+                        format_bytes(available),
+                    );
+                }
                 return Ok(format!(
                     "Full backup blocked: need {} free but only {} available.\n\
-                     Free space on the backup drive or remove old full-* snapshots, then retry.{persist_warn}",
+                     Free space on the backup drive or remove old full-* snapshots, then retry.",
                     format_bytes(needed),
                     format_bytes(available)
                 ));
@@ -242,10 +242,13 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        if let Err(e) = pending_full::set_pending_full_backup(false) {
+        if let Err(e) = pending_full::set_pending_full_backup_with_retry(false) {
             log_line(
                 &mut log_file,
-                &format!("WARNING: could not clear pending-full.toml (backup succeeded): {e}"),
+                &format!(
+                    "WARNING: could not clear pending-full.toml after 3 attempts \
+                     (backup succeeded; next auto run may repeat this full): {e}"
+                ),
             );
         }
     } else {
@@ -487,12 +490,12 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
 
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
-fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
-    auto_kind_with_pending(
+fn auto_kind(config: &Config, dest_root: &Path) -> Result<BackupKind> {
+    Ok(auto_kind_with_pending(
         config,
         dest_root,
-        pending_full::pending_full_for_auto(),
-    )
+        pending_full::pending_full_for_auto()?,
+    ))
 }
 
 fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool) -> BackupKind {
@@ -791,7 +794,7 @@ mod tests {
             full_backup_day: "Neverday".to_string(), // won't match any real weekday
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Full);
+        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -812,7 +815,7 @@ mod tests {
             incremental_every_n_days: 1,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Skip);
+        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Skip);
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -831,7 +834,7 @@ mod tests {
             incremental_every_n_days: 1,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir), BackupKind::Incremental);
+        assert_eq!(auto_kind(&cfg, &dir).unwrap(), BackupKind::Incremental);
         fs::remove_dir_all(&dir).unwrap();
     }
 
