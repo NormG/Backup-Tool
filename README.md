@@ -58,7 +58,7 @@ hardlinked so they consume no extra disk space.
 Download and install the pre-built RPM directly — no build tools needed:
 
 ```bash
-sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v1.0.8/backup-tool-1.0.8-1.fc44.x86_64.rpm
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v1.1.8/backup-tool-1.1.8-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -71,7 +71,7 @@ or when you want to compile from the latest source.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
-sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-1.0.8-1.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-1.1.8-1.fc44.x86_64.rpm
 backup-tool
 ```
 
