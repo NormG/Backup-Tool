@@ -2,8 +2,11 @@
 mod backup;
 mod config;
 mod drives;
+mod pending_full;
+mod run_lock;
 mod systemd;
 mod ui;
+mod year_end;
 
 use anyhow::{Context, Result};
 use backup::BackupKind;
@@ -78,4 +81,77 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    // ── CLI argument parsing ───────────────────────────────────────────────
+
+    #[test]
+    fn cli_no_args_opens_gui() {
+        let cli = Cli::try_parse_from(["backup-tool"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn cli_backup_subcommand_defaults_to_auto() {
+        let cli = Cli::try_parse_from(["backup-tool", "backup"]).unwrap();
+        match cli.command {
+            Some(Commands::Backup { kind }) => assert_eq!(kind, "auto"),
+            _ => panic!("expected Backup command"),
+        }
+    }
+
+    #[test]
+    fn cli_backup_full() {
+        let cli = Cli::try_parse_from(["backup-tool", "backup", "full"]).unwrap();
+        match cli.command {
+            Some(Commands::Backup { kind }) => assert_eq!(kind, "full"),
+            _ => panic!("expected Backup command"),
+        }
+    }
+
+    #[test]
+    fn cli_backup_incremental() {
+        let cli = Cli::try_parse_from(["backup-tool", "backup", "incremental"]).unwrap();
+        match cli.command {
+            Some(Commands::Backup { kind }) => assert_eq!(kind, "incremental"),
+            _ => panic!("expected Backup command"),
+        }
+    }
+
+    #[test]
+    fn cli_backup_inc_alias() {
+        // "inc" is accepted by BackupKind::from_str; clap passes it through as-is.
+        let cli = Cli::try_parse_from(["backup-tool", "backup", "inc"]).unwrap();
+        match cli.command {
+            Some(Commands::Backup { kind }) => assert_eq!(kind, "inc"),
+            _ => panic!("expected Backup command"),
+        }
+    }
+
+    #[test]
+    fn cli_help_flag_returns_display_help_error() {
+        let err = Cli::try_parse_from(["backup-tool", "--help"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn cli_version_flag_returns_display_version_error() {
+        let err = Cli::try_parse_from(["backup-tool", "--version"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn cli_unknown_subcommand_is_an_error() {
+        assert!(Cli::try_parse_from(["backup-tool", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn cli_extra_positional_arg_is_an_error() {
+        assert!(Cli::try_parse_from(["backup-tool", "stray-arg"]).is_err());
+    }
 }

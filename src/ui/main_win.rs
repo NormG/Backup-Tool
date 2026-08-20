@@ -75,6 +75,13 @@ pub fn show(app: &gtk4::Application, config: Config) {
     // Initial status.
     status_lbl.set_text(&status_text(&cfg.borrow()));
 
+    {
+        let cfg_for_reminder = cfg.borrow().clone();
+        win.connect_map(move |window| {
+            crate::year_end::maybe_show_year_end_reminder(window, &cfg_for_reminder);
+        });
+    }
+
     win.present();
 }
 
@@ -271,7 +278,8 @@ fn status_text(cfg: &Config) -> String {
          Drive label     : {}\n\
          Full backup day : {}\n\
          Daily time      : {}\n\
-         Retention       : {} days\n\
+         Full snapshots  : {}\n\
+         Inc safety      : {} days\n\
          Timer           : {}\n\
          {}",
         cfg.source_dir,
@@ -279,6 +287,7 @@ fn status_text(cfg: &Config) -> String {
         drive_label,
         cfg.full_backup_day,
         cfg.backup_time,
+        cfg.keep_full_snapshots_label(),
         cfg.retention_days,
         timer_active,
         timer_line,
@@ -409,7 +418,21 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     }
 
     // Retention
-    b.append(&field_label("Keep incremental snapshots for (days):"));
+    b.append(&field_label("Keep full snapshots (0 = unlimited):"));
+    let adj_keep_full = gtk4::Adjustment::new(
+        f64::from(cfg.borrow().keep_full_snapshots),
+        0.0,
+        365.0,
+        1.0,
+        12.0,
+        0.0,
+    );
+    let keep_full_spin = SpinButton::new(Some(&adj_keep_full), 1.0, 0);
+    b.append(&keep_full_spin);
+
+    b.append(&field_label(
+        "Orphan incremental safety retention (days, if full is delayed):",
+    ));
     let adj_ret = gtk4::Adjustment::new(
         f64::from(cfg.borrow().retention_days),
         1.0,
@@ -464,12 +487,14 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
             };
             let ret = ret_spin.value() as u32;
             let inc = inc_spin.value() as u32;
+            let keep_full = keep_full_spin.value() as u32;
             {
                 let mut c = cfg.borrow_mut();
                 c.full_backup_day = day;
                 c.backup_time = format!("{h:02}:{m:02}");
                 c.retention_days = ret;
                 c.incremental_every_n_days = inc;
+                c.keep_full_snapshots = keep_full;
             }
             match cfg.borrow().save() {
                 Ok(()) => {}
@@ -1141,9 +1166,7 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 }
 
                 if deleted == names.len() as u32 {
-                    create_lbl.set_text(&format!(
-                        "\u{2705}  Deleted {deleted} snapshot(s)."
-                    ));
+                    create_lbl.set_text(&format!("\u{2705}  Deleted {deleted} snapshot(s)."));
                 } else if deleted > 0 {
                     create_lbl.set_text(&format!(
                         "\u{26a0}\u{fe0f}  Deleted {deleted}/{} snapshot(s). {last_err}",
@@ -1484,11 +1507,10 @@ fn btrfs_delete_subvolume(snap_path: &str) -> Result<(), String> {
         .output()
         .map_err(|e| format!("btrfs not found: {e}"))?;
 
-    let needs_elev = !del_out.status.success()
-        && {
-            let e = String::from_utf8_lossy(&del_out.stderr).to_lowercase();
-            e.contains("not permitted") || e.contains("permission")
-        };
+    let needs_elev = !del_out.status.success() && {
+        let e = String::from_utf8_lossy(&del_out.stderr).to_lowercase();
+        e.contains("not permitted") || e.contains("permission")
+    };
 
     let del_out = if needs_elev {
         std::process::Command::new("pkexec")
@@ -1934,7 +1956,7 @@ fn build_about() -> GBox {
     let title_col = GBox::new(Orientation::Vertical, 4);
     title_col.append(
         &Label::builder()
-            .label("Backup-Tool")
+            .label("Backup")
             .css_classes(vec!["title-1"])
             .halign(Align::Start)
             .build(),

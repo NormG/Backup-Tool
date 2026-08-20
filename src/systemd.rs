@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use std::{path::{Path, PathBuf}, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use crate::config::Config;
 
@@ -138,6 +141,7 @@ fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
          SyslogIdentifier={app}\n\
          StandardOutput=journal\n\
          StandardError=journal\n\
+         TimeoutStartSec=infinity\n\
          TimeoutStopSec=3600\n\
          \n\
          [Install]\n\

@@ -1,6 +1,6 @@
 [package]
 name = "backup-tool"
-version = "0.1.7"
+version = "1.1.8"
 edition = "2021"
 authors = ["norm"]
 description = "GTK4 home-directory backup manager using rsync and systemd"
@@ -21,6 +21,7 @@ gtk4       = { version = "0.10", features = ["v4_14"] }
 serde      = { version = "1",  features = ["derive"] }
 serde_json = "1"
 toml       = "1"
+fs4        = "0.12"
 
 [profile.release]
 opt-level = 3
