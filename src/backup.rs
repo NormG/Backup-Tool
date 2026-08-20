@@ -214,7 +214,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         // Current-cycle incrementals are superseded by the new full.
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
-        pending_full::set_pending_full_backup(false)?;
+        if let Err(e) = pending_full::set_pending_full_backup(false) {
+            log_line(
+                &mut log_file,
+                &format!("WARNING: could not clear pending-full.toml (backup succeeded): {e}"),
+            );
+        }
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;
@@ -458,7 +463,7 @@ fn auto_kind(config: &Config, dest_root: &Path) -> BackupKind {
     auto_kind_with_pending(
         config,
         dest_root,
-        pending_full::pending_full_backup().unwrap_or(false),
+        pending_full::pending_full_backup_or_assume_pending(),
     )
 }
 
