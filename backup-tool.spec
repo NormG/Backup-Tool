@@ -2,8 +2,8 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
-Version:        0.1.7
-Release:        3%{?dist}
+Version:        1.0.8
+Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
 License:        GPL-3.0-or-later
@@ -142,6 +142,11 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Thu Aug 20 2026 norm <norm@localhost> - 1.0.8-1
+- About tab: rename display title from Home Backup to Backup
+- Retention policy, log rotation, deferred-full state file, year-end reminder
+- 47 unit tests
+
 * Sun Aug  2 2026 norm <norm@localhost> - 0.1.7-2
 - Fix RPM build when CARGO_TARGET_DIR is set externally
 - Ensure schedule reload writes service and timer units

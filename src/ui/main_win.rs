@@ -1956,7 +1956,7 @@ fn build_about() -> GBox {
     let title_col = GBox::new(Orientation::Vertical, 4);
     title_col.append(
         &Label::builder()
-            .label("Backup-Tool")
+            .label("Backup")
             .css_classes(vec!["title-1"])
             .halign(Align::Start)
             .build(),
