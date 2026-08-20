@@ -127,31 +127,35 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
-/// Whether auto mode should retry a deferred full (toml or marker).
+/// Whether auto mode should retry a deferred full.
+///
+/// `pending-full.toml` is authoritative whenever it is readable. The retry
+/// marker is consulted only when the TOML file is missing or quarantined.
 pub fn pending_full_for_auto() -> Result<bool> {
     if PendingFullState::path().exists() {
         match pending_full_backup() {
             Ok(false) => {
+                // Trust the compass — drop a stale marker left by interrupted I/O.
                 if retry_marker_path().exists() {
-                    persist_pending(true)?;
-                    return Ok(true);
+                    let _ = set_retry_marker(false);
                 }
-                return Ok(false);
+                Ok(false)
             }
-            Ok(true) => return Ok(true),
+            Ok(true) => Ok(true),
             Err(e) => {
                 quarantine_corrupt_toml()?;
                 if retry_marker_path().exists() {
                     return Ok(true);
                 }
-                return Err(e).with_context(|| {
+                Err(e).with_context(|| {
                     "pending-full.toml is unreadable and no retry marker exists; \
                      repair or remove the quarantined file"
-                });
+                })
             }
         }
+    } else {
+        Ok(retry_marker_path().exists())
     }
-    Ok(retry_marker_path().exists())
 }
 
 /// Persist deferred-full state with brief retries and marker fallback.
@@ -175,7 +179,16 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
                 "pending-full.toml persist failed after {PERSIST_ATTEMPTS} attempts: {}",
                 last_err.expect("retry loop always records at least one error")
             )
+        })?;
+        // Keep the compass aligned with the marker fallback.
+        with_lock(|| {
+            PendingFullState {
+                pending_full_backup: true,
+            }
+            .save()
         })
+        .with_context(|| "writing pending-full.toml after marker fallback")?;
+        Ok(())
     } else {
         Err(last_err.expect("retry loop always records at least one error"))
     }
@@ -250,22 +263,15 @@ mod tests {
     #[test]
     fn stale_marker_cleared_when_toml_is_false() {
         with_temp_data(|_| {
-            clear_pending_after_success().unwrap();
-            assert!(!pending_full_for_auto().unwrap());
-        });
-    }
-
-    #[test]
-    fn marker_fallback_reconciles_stale_false_toml() {
-        with_temp_data(|_| {
             PendingFullState {
                 pending_full_backup: false,
             }
             .save()
             .unwrap();
             set_retry_marker(true).unwrap();
-            assert!(pending_full_for_auto().unwrap());
-            assert!(pending_full_backup().unwrap());
+            assert!(!pending_full_for_auto().unwrap());
+            assert!(!retry_marker_path().exists());
+            assert!(!pending_full_backup().unwrap());
         });
     }
 }
