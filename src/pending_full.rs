@@ -50,6 +50,29 @@ impl PendingFullState {
     }
 }
 
+/// Fallback marker when pending-full.toml cannot be written.
+fn retry_marker_path() -> PathBuf {
+    Config::data_dir().join("pending-full.retry")
+}
+
+fn set_retry_marker(pending: bool) -> Result<()> {
+    let path = retry_marker_path();
+    if pending {
+        fs::create_dir_all(Config::data_dir())?;
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .with_context(|| format!("creating retry marker {}", path.display()))?;
+        Ok(())
+    } else if path.exists() {
+        fs::remove_file(&path).with_context(|| format!("removing retry marker {}", path.display()))
+    } else {
+        Ok(())
+    }
+}
+
 fn with_lock<R>(f: impl FnOnce() -> Result<R>) -> Result<R> {
     let lock_path = PendingFullState::lock_path();
     if let Some(parent) = lock_path.parent() {
@@ -72,22 +95,48 @@ pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
 
-/// Pending flag for auto mode. Missing state file means no retry is queued;
-/// an existing but unreadable file fails so auto mode does not guess.
+/// Pending flag for auto mode. Uses retry marker as fallback when toml is missing
+/// or unreadable so automatic backups keep running without losing deferred retries.
 pub fn pending_full_for_auto() -> Result<bool> {
+    if retry_marker_path().exists() {
+        return Ok(true);
+    }
     if !PendingFullState::path().exists() {
         return Ok(false);
     }
-    pending_full_backup()
+    match pending_full_backup() {
+        Ok(pending) => Ok(pending),
+        Err(e) => {
+            eprintln!(
+                "WARNING: pending-full.toml unreadable ({e}); \
+                 removing corrupt file and using normal schedule"
+            );
+            let _ = fs::remove_file(PendingFullState::path());
+            Ok(false)
+        }
+    }
 }
 
 const PERSIST_ATTEMPTS: u32 = 3;
 
-/// Persist deferred-full state with brief retries for transient I/O errors.
+fn persist_pending(pending: bool) -> Result<()> {
+    with_lock(|| {
+        if pending {
+            let mut state = PendingFullState::load().unwrap_or_default();
+            state.pending_full_backup = true;
+            state.save()?;
+        } else {
+            PendingFullState::default().save()?;
+        }
+        set_retry_marker(pending)
+    })
+}
+
+/// Persist deferred-full state with brief retries and a marker-file fallback.
 pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
     let mut last_err = None;
     for attempt in 0..PERSIST_ATTEMPTS {
-        match set_pending_full_backup(pending) {
+        match persist_pending(pending) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 last_err = Some(e);
@@ -97,18 +146,21 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
             }
         }
     }
-    Err(last_err.expect("retry loop always records at least one error"))
+
+    if pending {
+        set_retry_marker(true).with_context(|| {
+            format!(
+                "pending-full.toml persist failed after {PERSIST_ATTEMPTS} attempts: {}",
+                last_err.expect("retry loop always records at least one error")
+            )
+        })
+    } else {
+        Err(last_err.expect("retry loop always records at least one error"))
+    }
 }
 
 pub fn set_pending_full_backup(pending: bool) -> Result<()> {
-    with_lock(|| {
-        let mut state = PendingFullState::load()?;
-        if state.pending_full_backup == pending {
-            return Ok(());
-        }
-        state.pending_full_backup = pending;
-        state.save()
-    })
+    set_pending_full_backup_with_retry(pending)
 }
 
 #[cfg(test)]
