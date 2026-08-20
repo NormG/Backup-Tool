@@ -63,7 +63,7 @@ fn log_indicates_deferred_full() -> bool {
     };
     let mut saw_defer = false;
     for line in raw.lines().rev().take(300) {
-        if line.contains("Completed full snapshot") || line.contains("Starting full backup →") {
+        if line.contains("Completed full snapshot") {
             break;
         }
         if line.contains("Full backup deferred") {
