@@ -43,21 +43,26 @@ impl std::str::FromStr for BackupKind {
 /// the systemd `TimeoutStartSec` in the service unit.
 const AUTO_LOCK_WAIT_SECS: u64 = 7200;
 
-/// systemd `[Service]` TimeoutStartSec — must exceed [`AUTO_LOCK_WAIT_SECS`].
-pub(crate) const SYSTEMD_SERVICE_TIMEOUT_START_SECS: u64 = AUTO_LOCK_WAIT_SECS + 1800;
+/// Budget for rsync after the lock is acquired (large home trees can take hours).
+const BACKUP_RUN_BUDGET_SECS: u64 = 6 * 3600;
+
+/// systemd `[Service]` TimeoutStartSec — lock wait plus rsync budget.
+pub(crate) const SYSTEMD_SERVICE_TIMEOUT_START_SECS: u64 =
+    AUTO_LOCK_WAIT_SECS + BACKUP_RUN_BUDGET_SECS;
 
 /// Run a backup, appending progress to the application log.
 ///
 /// Returns a human-readable summary suitable for display in the GUI.
 pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
-    let preserve_full_on_lock_timeout = matches!(kind, BackupKind::Auto)
-        && (is_full_backup_day(config) || pending_full::pending_full_for_auto()?);
+    // Capture before the lock wait so a midnight crossing cannot change the plan.
+    let auto_wants_full = matches!(kind, BackupKind::Auto)
+        && (pending_full::pending_full_for_auto()? || is_full_backup_day(config));
 
     let _run_lock = match kind {
         BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(AUTO_LOCK_WAIT_SECS))? {
             Some(lock) => lock,
             None => {
-                if preserve_full_on_lock_timeout {
+                if auto_wants_full {
                     pending_full::set_pending_full_backup_with_retry(true).with_context(|| {
                         "timed out waiting for run lock while a full backup was due"
                     })?;
@@ -85,7 +90,11 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     let pending_retry = matches!(kind, BackupKind::Auto)
         && pending_full::pending_full_for_auto()?;
     let effective_kind = match kind {
-        BackupKind::Auto => auto_kind(config, &dest_root, pending_retry)?,
+        BackupKind::Auto => auto_kind_with_pending(
+            config,
+            &dest_root,
+            pending_retry || auto_wants_full,
+        ),
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
         }
@@ -527,7 +536,12 @@ fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<B
 
 fn auto_kind_with_pending(config: &Config, dest_root: &Path, pending_full: bool) -> BackupKind {
     if pending_full {
-        return BackupKind::Full;
+        if full_snapshot_exists_today(dest_root) {
+            // Full already landed (e.g. clear failed after success) — heal state.
+            let _ = pending_full::clear_pending_after_success();
+        } else {
+            return BackupKind::Full;
+        }
     }
 
     let today = Local::now().format("%A").to_string(); // "Monday", "Tuesday", …
@@ -812,6 +826,20 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(auto_kind_with_pending(&cfg, &dir, true), BackupKind::Full);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_skips_pending_when_full_already_exists_today() {
+        let dir = tmp_dir("auto-pending-today-full");
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        make_snapshot_dir(&dir, &format!("full-{today}_120000"));
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            ..Config::default()
+        };
+        assert_ne!(auto_kind_with_pending(&cfg, &dir, true), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
