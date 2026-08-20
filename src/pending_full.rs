@@ -174,24 +174,19 @@ pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
     }
 
     if pending {
-        set_retry_marker(true).with_context(|| {
+        with_lock(|| {
+            PendingFullState {
+                pending_full_backup: true,
+            }
+            .save()
+        })
+        .with_context(|| {
             format!(
                 "pending-full.toml persist failed after {PERSIST_ATTEMPTS} attempts: {}",
                 last_err.expect("retry loop always records at least one error")
             )
         })?;
-        match with_lock(|| {
-            PendingFullState {
-                pending_full_backup: true,
-            }
-            .save()
-        }) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = set_retry_marker(false);
-                Err(e).context("writing pending-full.toml after marker fallback")
-            }
-        }
+        set_retry_marker(true)
     } else {
         Err(last_err.expect("retry loop always records at least one error"))
     }

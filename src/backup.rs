@@ -39,16 +39,8 @@ impl std::str::FromStr for BackupKind {
     }
 }
 
-/// Max time an automatic backup waits for an in-progress run. Must stay below
-/// the systemd `TimeoutStartSec` in the service unit.
+/// Max time an automatic backup waits for an in-progress run.
 const AUTO_LOCK_WAIT_SECS: u64 = 7200;
-
-/// Budget for rsync after the lock is acquired (large home trees can take hours).
-const BACKUP_RUN_BUDGET_SECS: u64 = 6 * 3600;
-
-/// Documented minimum for systemd `TimeoutStartSec`; the unit uses `infinity`.
-pub(crate) const SYSTEMD_SERVICE_TIMEOUT_START_SECS: u64 =
-    AUTO_LOCK_WAIT_SECS + BACKUP_RUN_BUDGET_SECS;
 
 /// Run a backup, appending progress to the application log.
 ///
@@ -546,6 +538,56 @@ fn full_snapshot_already_satisfied(dest_root: &Path, scheduled_full_date: Option
         .is_some_and(|d| full_snapshot_exists_on_date(dest_root, d))
 }
 
+/// Pending full is satisfied when no incremental snapshot is newer than the
+/// newest full backup (e.g. clear failed after a successful full).
+fn pending_full_already_resolved(dest_root: &Path) -> bool {
+    let latest_full = match newest_full_snapshot(dest_root) {
+        Some(p) => p,
+        None => return false,
+    };
+    let full_name = latest_full
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let full_ts = match snapshot_timestamp(&full_name) {
+        Some(ts) => ts,
+        None => return false,
+    };
+
+    dest_root
+        .read_dir()
+        .map(|rd| {
+            !rd.flatten().any(|e| {
+                let file_name = e.file_name();
+                let name = file_name.to_string_lossy();
+                name.starts_with("inc-")
+                    && snapshot_timestamp(&name)
+                        .is_some_and(|ts| ts > full_ts)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn newest_full_snapshot(dest_root: &Path) -> Option<PathBuf> {
+    dest_root
+        .read_dir()
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let file_name = e.file_name();
+            let name = file_name.to_string_lossy();
+            name.starts_with("full-") && e.path().is_dir()
+        })
+        .max_by_key(|e| e.file_name())
+        .map(|e| e.path())
+}
+
+fn snapshot_timestamp(name: &str) -> Option<String> {
+    let dash = name.find('-')?;
+    Some(name.get(dash + 1..)?.to_string())
+}
+
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
 fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
@@ -559,7 +601,9 @@ fn auto_kind_with_pending(
     scheduled_full_date: Option<&str>,
 ) -> BackupKind {
     if pending_full {
-        if full_snapshot_already_satisfied(dest_root, scheduled_full_date) {
+        if full_snapshot_already_satisfied(dest_root, scheduled_full_date)
+            || pending_full_already_resolved(dest_root)
+        {
             // Full already landed (e.g. clear failed after success) — heal state.
             let _ = pending_full::clear_pending_after_success();
         } else {
@@ -880,6 +924,23 @@ mod tests {
             auto_kind_with_pending(&cfg, &dir, true, Some(scheduled)),
             BackupKind::Full
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_skips_pending_when_no_inc_after_latest_full() {
+        let dir = tmp_dir("auto-pending-no-inc-after-full");
+        make_snapshot_dir(&dir, "inc-2020-01-01_120000");
+        make_snapshot_dir(&dir, "full-2024-06-15_120000");
+
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            ..Config::default()
+        };
+        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
+
+        make_snapshot_dir(&dir, "inc-2024-06-16_120000");
+        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None), BackupKind::Full);
         fs::remove_dir_all(&dir).unwrap();
     }
 
