@@ -105,11 +105,19 @@ fn with_lock<R>(f: impl FnOnce() -> Result<R>) -> Result<R> {
 
 fn persist_pending(pending: bool) -> Result<()> {
     with_lock(|| {
-        PendingFullState {
-            pending_full_backup: pending,
+        if pending {
+            PendingFullState {
+                pending_full_backup: true,
+            }
+            .save()?;
+            set_retry_marker(true)
+        } else {
+            set_retry_marker(false)?;
+            PendingFullState {
+                pending_full_backup: false,
+            }
+            .save()
         }
-        .save()?;
-        set_retry_marker(pending)
     })
 }
 
@@ -121,26 +129,28 @@ pub fn pending_full_backup() -> Result<bool> {
 
 /// Whether auto mode should retry a deferred full (toml or marker).
 pub fn pending_full_for_auto() -> Result<bool> {
-    if retry_marker_path().exists() {
-        return Ok(true);
-    }
-    if !PendingFullState::path().exists() {
-        return Ok(false);
-    }
-    match pending_full_backup() {
-        Ok(pending) => Ok(pending),
-        Err(e) => {
-            quarantine_corrupt_toml()?;
-            if retry_marker_path().exists() {
-                Ok(true)
-            } else {
-                Err(e).with_context(|| {
+    if PendingFullState::path().exists() {
+        match pending_full_backup() {
+            Ok(false) => {
+                if retry_marker_path().exists() {
+                    let _ = set_retry_marker(false);
+                }
+                return Ok(false);
+            }
+            Ok(true) => return Ok(true),
+            Err(e) => {
+                quarantine_corrupt_toml()?;
+                if retry_marker_path().exists() {
+                    return Ok(true);
+                }
+                return Err(e).with_context(|| {
                     "pending-full.toml is unreadable and no retry marker exists; \
                      repair or remove the quarantined file"
-                })
+                });
             }
         }
     }
+    Ok(retry_marker_path().exists())
 }
 
 /// Persist deferred-full state with brief retries and marker fallback.
@@ -220,6 +230,23 @@ mod tests {
             fs::write(PendingFullState::path(), "not valid toml {{{").unwrap();
             set_retry_marker(true).unwrap();
             assert!(pending_full_for_auto().unwrap());
+        });
+    }
+
+    #[test]
+    fn stale_marker_cleared_when_toml_is_false() {
+        with_temp_data(|_| {
+            set_pending_full_backup_with_retry(true).unwrap();
+            clear_pending_after_success().unwrap();
+            // Simulate interrupted clear: marker left behind after toml cleared.
+            set_retry_marker(true).unwrap();
+            PendingFullState {
+                pending_full_backup: false,
+            }
+            .save()
+            .unwrap();
+            assert!(!pending_full_for_auto().unwrap());
+            assert!(!retry_marker_path().exists());
         });
     }
 }
