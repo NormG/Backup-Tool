@@ -62,8 +62,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         },
     };
 
-    let mut pending_restore = pending_full::PendingRestoreGuard::default();
-
     // ── 1. Ensure the destination directory is reachable ──────────────────
     let dest_root = resolve_dest(config)?;
 
@@ -83,11 +81,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
             n = config.incremental_every_n_days
         );
         return Ok(msg);
-    }
-
-    if effective_kind == BackupKind::Full && pending_retry {
-        pending_full::claim_pending_full()?;
-        pending_restore = pending_full::PendingRestoreGuard::arm();
     }
 
     // ── 2b. Full backup: prune first, then verify there is room ───────────
@@ -258,7 +251,6 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 ),
             );
         }
-        pending_restore.disarm();
     } else {
         // Safety net for orphaned incrementals when a full has not run recently.
         apply_retention(&dest_root, config.retention_days, &mut log_file)?;

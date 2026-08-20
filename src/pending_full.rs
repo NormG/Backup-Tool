@@ -143,11 +143,6 @@ pub fn pending_full_for_auto() -> Result<bool> {
     }
 }
 
-/// Clear pending retry state at the start of a claimed full backup.
-pub fn claim_pending_full() -> Result<()> {
-    persist_pending(false)
-}
-
 /// Persist deferred-full state with brief retries and marker fallback.
 pub fn set_pending_full_backup_with_retry(pending: bool) -> Result<()> {
     let mut last_err = None;
@@ -185,30 +180,6 @@ pub fn clear_pending_after_success() -> Result<()> {
     set_pending_full_backup_with_retry(false)
 }
 
-/// Restores pending-full retry if a claimed full backup fails before completion.
-#[derive(Default)]
-pub(crate) struct PendingRestoreGuard {
-    active: bool,
-}
-
-impl PendingRestoreGuard {
-    pub fn arm() -> Self {
-        Self { active: true }
-    }
-
-    pub fn disarm(&mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for PendingRestoreGuard {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = set_pending_full_backup_with_retry(true);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +209,7 @@ mod tests {
         with_temp_data(|_| {
             set_pending_full_backup_with_retry(true).unwrap();
             assert!(pending_full_for_auto().unwrap());
-            claim_pending_full().unwrap();
+            clear_pending_after_success().unwrap();
             assert!(!pending_full_for_auto().unwrap());
         });
     }
