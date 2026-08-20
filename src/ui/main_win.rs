@@ -75,6 +75,13 @@ pub fn show(app: &gtk4::Application, config: Config) {
     // Initial status.
     status_lbl.set_text(&status_text(&cfg.borrow()));
 
+    {
+        let cfg_for_reminder = cfg.borrow().clone();
+        win.connect_map(move |window| {
+            crate::year_end::maybe_show_year_end_reminder(window, &cfg_for_reminder);
+        });
+    }
+
     win.present();
 }
 

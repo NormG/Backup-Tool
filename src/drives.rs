@@ -315,11 +315,16 @@ pub fn detect_label_for_path(path: &str) -> Option<String> {
 
 /// Available free bytes on the filesystem containing `path`.
 pub fn available_bytes(path: &Path) -> Result<u64> {
+    Ok(filesystem_bytes(path)?.0)
+}
+
+/// Available and total bytes on the filesystem containing `path`.
+pub fn filesystem_bytes(path: &Path) -> Result<(u64, u64)> {
     let out = Command::new("df")
-        .args(["--output=avail", "-B1", "--"])
+        .args(["--output=avail,size", "-B1", "--"])
         .arg(path)
         .output()
-        .context("running df")?;
+        .with_context(|| format!("running df on {}", path.display()))?;
 
     if !out.status.success() {
         bail!(
@@ -329,15 +334,25 @@ pub fn available_bytes(path: &Path) -> Result<u64> {
         );
     }
 
-    let line = String::from_utf8_lossy(&out.stdout)
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let fields: Vec<&str> = stdout
         .lines()
         .nth(1)
         .context("parsing df output")?
-        .trim()
-        .to_string();
+        .split_whitespace()
+        .collect();
 
-    line.parse::<u64>()
-        .with_context(|| format!("parsing df avail bytes '{line}'"))
+    if fields.len() < 2 {
+        bail!("unexpected df output for {}", path.display());
+    }
+
+    let avail = fields[0]
+        .parse::<u64>()
+        .with_context(|| format!("parsing df avail bytes '{}'", fields[0]))?;
+    let total = fields[1]
+        .parse::<u64>()
+        .with_context(|| format!("parsing df size bytes '{}'", fields[1]))?;
+    Ok((avail, total))
 }
 
 /// Find the current mountpoint of a partition with the given UUID by querying

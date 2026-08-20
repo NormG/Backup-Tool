@@ -4,6 +4,7 @@ mod config;
 mod drives;
 mod systemd;
 mod ui;
+mod year_end;
 
 use anyhow::{Context, Result};
 use backup::BackupKind;
