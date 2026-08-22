@@ -27,7 +27,7 @@ hardlinked so they consume no extra disk space.
   defaults exclude caches, trash, disc images, and browser data
 - **Systemd user timer** — fully user-level (no root, no cron); survives reboots
   and can be toggled from the GUI
-- **CLI headless mode** — `backup-tool --backup auto` is what systemd calls;
+- **CLI headless mode** — `backup-tool backup auto` is what systemd calls;
   can also be invoked manually for scripting
 - **Desktop integration** — `.desktop` launcher and icon installed to standard
   XDG paths; appears in GNOME Activities / application launchers
@@ -58,7 +58,7 @@ hardlinked so they consume no extra disk space.
 Download and install the pre-built RPM directly — no build tools needed:
 
 ```bash
-sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.8/backup-tool-0.1.8-1.fc44.x86_64.rpm
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.9/backup-tool-0.1.9-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -71,7 +71,7 @@ or when you want to compile from the latest source.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
-sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.8-1.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.9-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -189,9 +189,9 @@ Requires `btrfs-progs`: `sudo dnf install btrfs-progs`
 The same binary is called by systemd when the timer fires:
 
 ```bash
-backup-tool --backup auto         # full on configured day, incremental otherwise
-backup-tool --backup full         # force a full snapshot
-backup-tool --backup incremental  # force an incremental snapshot
+backup-tool backup auto         # full on configured day, incremental otherwise
+backup-tool backup full         # force a full snapshot
+backup-tool backup incremental  # force an incremental snapshot
 ```
 
 Exit codes follow standard UNIX conventions (0 = success, non-zero = error).
@@ -285,7 +285,7 @@ share disk blocks with the full (or previous incremental) they were derived from
 
 Installed to `~/.config/systemd/user/`:
 
-**`backup-tool.service`** — runs `backup-tool --backup auto`; type `oneshot`
+**`backup-tool.service`** — runs `backup-tool backup auto`; type `oneshot`
 with a 1-hour stop timeout so large backups are not killed mid-run.
 
 **`backup-tool.timer`** — fires daily at the configured time; `Persistent=true`
@@ -369,7 +369,7 @@ cargo build --release   # optimised stripped binary
 ./target/debug/backup-tool
 
 # Test the backup engine without the GUI (needs a config file):
-./target/debug/backup-tool --backup full
+./target/debug/backup-tool backup full
 ```
 
 ### Project Layout

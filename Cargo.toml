@@ -1,6 +1,6 @@
 [package]
 name = "backup-tool"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["norm"]
 description = "GTK4 home-directory backup manager using rsync and systemd"

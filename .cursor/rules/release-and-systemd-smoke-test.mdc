@@ -1,0 +1,41 @@
+---
+description: Backup-Tool release checklist — test the systemd path, not just cargo test
+alwaysApply: true
+---
+
+# Release & systemd smoke test (learned 2026-08-22)
+
+## Incident
+
+v0.1.8 shipped with CLI subcommands (`backup auto`) but many installs still had
+user units calling the removed flag (`--backup auto`). Timer fired nightly;
+service exited in ~24ms; no backups ran for days. Unit tests and Greptile 5/5
+did not catch it — only the production path failed.
+
+## When changing CLI, systemd units, or install/RPM scripts
+
+Touch **every consumer**, not just source that writes new units:
+
+1. `src/systemd.rs` — `ExecStart` must match clap subcommands in `src/main.rs`
+2. `~/.config/systemd/user/backup-tool.service` on upgrade — add RPM `%post`
+   migration or repair command; existing user files are not rewritten by binary-only upgrades
+3. `README.md` — CLI examples must match shipped syntax
+4. Integration test — assert generated service unit string invokes a valid CLI
+
+## Human smoke test before every release (Norm runs this)
+
+```bash
+grep ExecStart ~/.config/systemd/user/backup-tool.service
+/usr/bin/backup-tool backup auto          # must match ExecStart
+systemctl --user start backup-tool.service
+journalctl --user -u backup-tool.service -n 20 --no-pager
+```
+
+Pass = journal shows rsync/backup progress, not CLI parse errors.
+
+## Agent duty on Backup-Tool releases
+
+- Never claim the systemd unit is correct without reading the user's
+  `~/.config/systemd/user/backup-tool.service` or verifying migration in spec.
+- After CLI/interface changes, grep repo for old syntax (`--backup`, old unit names).
+- Treat `cargo test` + Greptile as necessary but **not sufficient** for release sign-off.

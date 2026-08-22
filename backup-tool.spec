@@ -2,7 +2,7 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
-Version:        0.1.8
+Version:        0.1.9
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
@@ -122,8 +122,28 @@ migrate_home_backup_user_units() {
     rm -f "$home/.local/share/applications/home-backup.desktop"
 }
 
+# Fix pre-0.1.8 user service units that still use the removed --backup flag.
+migrate_backup_tool_execstart() {
+    local user="$1"
+    local home
+    home=$(getent passwd "$user" | cut -d: -f6) || return 0
+    [ -n "$home" ] || return 0
+
+    local svc="$home/.config/systemd/user/backup-tool.service"
+    [ -f "$svc" ] || return 0
+
+    if grep -q '--backup' "$svc" 2>/dev/null; then
+        sed -i 's|--backup auto|backup auto|g; s|--backup full|backup full|g; s|--backup incremental|backup incremental|g; s|--backup inc|backup inc|g' "$svc"
+        if ! grep -q 'TimeoutStartSec=' "$svc" 2>/dev/null; then
+            sed -i '/^TimeoutStopSec=/i TimeoutStartSec=infinity' "$svc"
+        fi
+        runuser -u "$user" -- systemctl --user daemon-reload &>/dev/null || true
+    fi
+}
+
 if [ -n "${SUDO_USER:-}" ]; then
     migrate_home_backup_user_units "$SUDO_USER"
+    migrate_backup_tool_execstart "$SUDO_USER"
 fi
 
 %postun
@@ -142,6 +162,10 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sat Aug 22 2026 norm <norm@localhost> - 0.1.9-1
+- RPM post-install: migrate stale ExecStart (--backup → backup subcommand)
+- README: fix CLI examples to match clap subcommands
+
 * Thu Aug 20 2026 norm <norm@localhost> - 0.1.8-1
 - About tab: display title GTK Backup Manager (app/window remains Backup-Tool)
 - Retention policy, log rotation, deferred-full state file, year-end reminder

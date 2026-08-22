@@ -306,3 +306,32 @@ fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn service_unit_uses_backup_subcommand_not_legacy_flag() {
+        let dir = std::env::temp_dir().join(format!(
+            "backup-tool-systemd-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        write_service_unit(&dir, "/usr/bin/backup-tool").unwrap();
+        let svc = fs::read_to_string(dir.join(SERVICE)).unwrap();
+        assert!(
+            svc.contains("ExecStart=/usr/bin/backup-tool backup auto"),
+            "unexpected service unit:\n{svc}"
+        );
+        assert!(
+            !svc.contains("--backup"),
+            "legacy --backup flag must not appear in generated unit"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+}
