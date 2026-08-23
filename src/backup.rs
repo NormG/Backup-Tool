@@ -407,7 +407,7 @@ fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &st
     }
 }
 
-/// Add owner write+execute on directories so `remove_dir_all` can unlink
+/// Add owner rwx on directories so `remove_dir_all` can list and unlink
 /// children. `rsync --archive` preserves modes; Go module caches (`$GOPATH/pkg/mod`)
 /// are 0555 by design. Does not follow symlinks.
 fn make_tree_deletable(root: &Path) {
@@ -418,7 +418,7 @@ fn make_tree_deletable(root: &Path) {
         return;
     }
     let mut perms = meta.permissions();
-    perms.set_mode(perms.mode() | 0o300);
+    perms.set_mode(perms.mode() | 0o700);
     let _ = fs::set_permissions(root, perms);
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
@@ -1182,6 +1182,35 @@ mod tests {
             !snap.exists(),
             "0555 Go module dirs must not block snapshot deletion"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn try_remove_snapshot_deletes_unreadable_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmp_dir("unreadable-dir");
+        let snap = dir.join("inc-2024-01-02_120000");
+        let nested = snap.join("secret/locked");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("x"), "x").unwrap();
+        let mut perms = fs::metadata(&nested).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&nested, perms).unwrap();
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        try_remove_snapshot(
+            &snap,
+            "inc-2024-01-02_120000",
+            &mut log,
+            "incremental snapshot",
+        );
+        assert!(!snap.exists(), "0000 dirs must not block snapshot deletion");
         fs::remove_dir_all(&dir).unwrap();
     }
 
