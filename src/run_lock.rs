@@ -70,7 +70,8 @@ mod tests {
     #[test]
     fn second_acquire_fails_while_first_held() {
         let _guard = Config::lock_test_data_dir();
-        let dir = std::env::temp_dir().join(format!("backup-tool-runlock-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("backup-tool-runlock-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("BACKUP_TOOL_DATA_DIR", &dir);
