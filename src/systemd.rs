@@ -314,10 +314,8 @@ mod tests {
 
     #[test]
     fn service_unit_uses_backup_subcommand_not_legacy_flag() {
-        let dir = std::env::temp_dir().join(format!(
-            "backup-tool-systemd-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("backup-tool-systemd-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 

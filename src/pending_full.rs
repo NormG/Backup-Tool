@@ -138,6 +138,7 @@ fn persist_pending(pending: bool) -> Result<()> {
 
 const PERSIST_ATTEMPTS: u32 = 3;
 
+#[cfg(test)]
 pub fn pending_full_backup() -> Result<bool> {
     with_lock(|| Ok(PendingFullState::load()?.pending_full_backup))
 }
@@ -151,7 +152,9 @@ pub fn pending_full_since() -> Result<Option<String>> {
 /// `pending-full.toml` is authoritative whenever it is readable. The retry
 /// marker is consulted only when the TOML file is missing or quarantined.
 pub fn pending_full_for_auto() -> Result<bool> {
-    if PendingFullState::path().exists() || PendingFullState::path().with_extension("toml.tmp").exists() {
+    if PendingFullState::path().exists()
+        || PendingFullState::path().with_extension("toml.tmp").exists()
+    {
         match PendingFullState::load() {
             Ok(state) if !state.pending_full_backup => {
                 // Trust the compass — drop a stale marker left by interrupted I/O.
@@ -257,10 +260,8 @@ mod tests {
 
     fn with_temp_data<R>(f: impl FnOnce(&PathBuf) -> R) -> R {
         let _guard = Config::lock_test_data_dir();
-        let dir = std::env::temp_dir().join(format!(
-            "backup-tool-pending-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("backup-tool-pending-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         std::env::set_var("BACKUP_TOOL_DATA_DIR", &dir);

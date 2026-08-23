@@ -264,6 +264,9 @@ share disk blocks with the full (or previous incremental) they were derived from
 
 - **Incrementals reset on each full** — when a full backup succeeds, all
   `inc-*` snapshots from the previous cycle are deleted automatically.
+  Directories that `rsync --archive` copied as read-only (Go module caches are
+  0555) get owner write+execute before delete; otherwise prune fails with
+  permission denied and the incrementals stay.
 - **Full snapshot limit** — only the newest `keep_full_snapshots` full backups
   are kept when set to a positive number (wizard default 12).  Set to `0` to
   keep all full snapshots.  Upgraded configs omit this field until you save a

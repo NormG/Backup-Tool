@@ -3,7 +3,7 @@ use chrono::Local;
 use std::{
     fs,
     io::Write,
-    os::unix::fs as unix_fs,
+    os::unix::fs::{self as unix_fs, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
@@ -56,26 +56,26 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     };
 
     let _run_lock = match kind {
-        BackupKind::Auto => match run_lock::RunLock::acquire_wait(Duration::from_secs(AUTO_LOCK_WAIT_SECS))? {
-            Some(lock) => lock,
-            None => {
-                if auto_wants_full {
-                    pending_full::set_pending_full_backup_with_retry(true).with_context(|| {
-                        "timed out waiting for run lock while a full backup was due"
-                    })?;
+        BackupKind::Auto => {
+            match run_lock::RunLock::acquire_wait(Duration::from_secs(AUTO_LOCK_WAIT_SECS))? {
+                Some(lock) => lock,
+                None => {
+                    if auto_wants_full {
+                        pending_full::set_pending_full_backup_with_retry(true).with_context(
+                            || "timed out waiting for run lock while a full backup was due",
+                        )?;
+                    }
+                    anyhow::bail!(
+                        "Timed out after {} hours waiting for an in-progress backup to finish",
+                        AUTO_LOCK_WAIT_SECS / 3600
+                    );
                 }
-                anyhow::bail!(
-                    "Timed out after {} hours waiting for an in-progress backup to finish",
-                    AUTO_LOCK_WAIT_SECS / 3600
-                );
             }
-        },
+        }
         _ => match run_lock::RunLock::try_acquire()? {
             Some(lock) => lock,
             None => {
-                return Ok(
-                    "Backup skipped: another backup is already in progress.".to_string(),
-                );
+                return Ok("Backup skipped: another backup is already in progress.".to_string());
             }
         },
     };
@@ -90,8 +90,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         None
     };
 
-    let pending_retry = matches!(kind, BackupKind::Auto)
-        && pending_full::pending_full_for_auto()?;
+    let pending_retry = matches!(kind, BackupKind::Auto) && pending_full::pending_full_for_auto()?;
     let effective_kind = match kind {
         BackupKind::Auto => auto_kind_with_pending(
             config,
@@ -227,6 +226,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // rsync exit 24 = source files vanished (normal for live home dirs).
     if !output.status.success() && exit_code != 24 {
+        make_tree_deletable(&temp_dir);
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_file(&rsync_log);
         bail!("rsync failed with exit code {exit_code}");
@@ -396,6 +396,7 @@ fn log_line(log: &mut fs::File, message: &str) {
 }
 
 fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &str) {
+    make_tree_deletable(path);
     if let Err(e) = fs::remove_dir_all(path) {
         log_line(
             log,
@@ -403,6 +404,26 @@ fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &st
         );
     } else {
         log_line(log, &format!("Retention: removed {name}"));
+    }
+}
+
+/// Add owner write+execute on directories so `remove_dir_all` can unlink
+/// children. `rsync --archive` preserves modes; Go module caches (`$GOPATH/pkg/mod`)
+/// are 0555 by design. Does not follow symlinks.
+fn make_tree_deletable(root: &Path) {
+    let Ok(meta) = fs::symlink_metadata(root) else {
+        return;
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return;
+    }
+    let mut perms = meta.permissions();
+    perms.set_mode(perms.mode() | 0o300);
+    let _ = fs::set_permissions(root, perms);
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            make_tree_deletable(&entry.path());
+        }
     }
 }
 
@@ -541,8 +562,7 @@ fn full_snapshot_already_satisfied(dest_root: &Path, scheduled_full_date: Option
     if full_snapshot_exists_today(dest_root) {
         return true;
     }
-    scheduled_full_date
-        .is_some_and(|d| full_snapshot_exists_on_date(dest_root, d))
+    scheduled_full_date.is_some_and(|d| full_snapshot_exists_on_date(dest_root, d))
 }
 
 /// Pending full is satisfied when a full snapshot newer than [`pending_since`]
@@ -572,9 +592,7 @@ fn pending_full_already_resolved(dest_root: &Path, pending_since: Option<&str>) 
             !rd.flatten().any(|e| {
                 let file_name = e.file_name();
                 let name = file_name.to_string_lossy();
-                name.starts_with("inc-")
-                    && snapshot_timestamp(&name)
-                        .is_some_and(|ts| ts > full_ts)
+                name.starts_with("inc-") && snapshot_timestamp(&name).is_some_and(|ts| ts > full_ts)
             })
         })
         .unwrap_or(false)
@@ -601,8 +619,15 @@ fn snapshot_timestamp(name: &str) -> Option<String> {
 
 /// Decide the backup kind based on the day of week, existing snapshots,
 /// and the configured incremental period.
+#[cfg(test)]
 fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<BackupKind> {
-    Ok(auto_kind_with_pending(config, dest_root, pending_retry, None, None))
+    Ok(auto_kind_with_pending(
+        config,
+        dest_root,
+        pending_retry,
+        None,
+        None,
+    ))
 }
 
 fn auto_kind_with_pending(
@@ -904,7 +929,10 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_eq!(auto_kind_with_pending(&cfg, &dir, true, None, None), BackupKind::Full);
+        assert_eq!(
+            auto_kind_with_pending(&cfg, &dir, true, None, None),
+            BackupKind::Full
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -918,7 +946,10 @@ mod tests {
             full_backup_day: "Neverday".to_string(),
             ..Config::default()
         };
-        assert_ne!(auto_kind_with_pending(&cfg, &dir, true, None, None), BackupKind::Full);
+        assert_ne!(
+            auto_kind_with_pending(&cfg, &dir, true, None, None),
+            BackupKind::Full
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1028,7 +1059,10 @@ mod tests {
             incremental_every_n_days: 1,
             ..Config::default()
         };
-        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Incremental);
+        assert_eq!(
+            auto_kind(&cfg, &dir, false).unwrap(),
+            BackupKind::Incremental
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1116,6 +1150,38 @@ mod tests {
         assert!(dir.join("full-2024-01-01_120000").exists());
         assert!(!dir.join("inc-2024-01-02_120000").exists());
         assert!(!dir.join("inc-2024-01-03_120000").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn try_remove_snapshot_deletes_readonly_go_module_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmp_dir("readonly-gomod");
+        let snap = dir.join("inc-2024-01-02_120000");
+        let nested = snap.join("go/pkg/mod/example.com/mod@v1.0.0");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("go.mod"), "module example\n").unwrap();
+        let mut perms = fs::metadata(&nested).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&nested, perms).unwrap();
+
+        let log_path = dir.join("test.log");
+        let mut log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap();
+        try_remove_snapshot(
+            &snap,
+            "inc-2024-01-02_120000",
+            &mut log,
+            "incremental snapshot",
+        );
+        assert!(
+            !snap.exists(),
+            "0555 Go module dirs must not block snapshot deletion"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
