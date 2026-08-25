@@ -2,7 +2,7 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
-Version:        0.1.9
+Version:        0.1.10
 Release:        1%{?dist}
 Summary:        GTK4 home-directory backup manager using rsync and systemd
 
@@ -162,6 +162,10 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Tue Aug 25 2026 norm <norm@localhost> - 0.1.10-1
+- Default excludes: fix ComfyUI path, add LM Studio models, exclude lorraine.shadow
+- Empty user trash on backup volume mount root before each backup
+
 * Sat Aug 22 2026 norm <norm@localhost> - 0.1.9-1
 - RPM post-install: migrate stale ExecStart (--backup → backup subcommand)
 - README: fix CLI examples to match clap subcommands

@@ -50,28 +50,50 @@ impl Default for Config {
             drive_label: None,
             full_backup_day: "Monday".to_string(),
             backup_time: "02:00".to_string(),
-            excludes: vec![
-                ".cache/".to_string(),
-                ".thumbnails/".to_string(),
-                ".var/app/*/cache/".to_string(),
-                ".mozilla/firefox/*/cache2/".to_string(),
-                ".config/google-chrome/*/Cache/".to_string(),
-                ".config/chromium/*/Cache/".to_string(),
-                ".local/share/Trash/".to_string(),
-                ".Trash-*/".to_string(),
-                "*.iso".to_string(),
-                ".extras/".to_string(),
-                "lost+found/".to_string(),
-                ".gvfs/".to_string(),
-                ".cargo/".to_string(),
-                "*~".to_string(),
-            ],
+            excludes: default_excludes(),
             retention_days: 30,
             incremental_every_n_days: 1,
             keep_full_snapshots: 12,
             installed: false,
         }
     }
+}
+
+/// Built-in rsync exclude patterns for new installs and "Reset to defaults".
+pub fn default_excludes() -> Vec<String> {
+    vec![
+        ".cache/".to_string(),
+        ".thumbnails/".to_string(),
+        ".var/app/*/cache/".to_string(),
+        ".var/app/ai.lmstudio.lm-studio/.lmstudio/models/".to_string(),
+        ".mozilla/firefox/*/cache2/".to_string(),
+        ".config/google-chrome/*/Cache/".to_string(),
+        ".config/chromium/*/Cache/".to_string(),
+        ".local/share/Trash/".to_string(),
+        ".Trash-*/".to_string(),
+        "*.iso".to_string(),
+        ".extras/".to_string(),
+        "lost+found/".to_string(),
+        ".gvfs/".to_string(),
+        "*~".to_string(),
+        ".cargo/registry/".to_string(),
+        ".cargo/git/".to_string(),
+        ".local/share/containers/storage/overlay/".to_string(),
+        "Projects/shared_models/".to_string(),
+        "Projects/LLM/models/".to_string(),
+        "Projects/LLM/llama.cpp/models/".to_string(),
+        "Projects/LLM/whisper.cpp/models/".to_string(),
+        "Projects/ComfyUI/models/".to_string(),
+        "Projects/LocalAI/models/".to_string(),
+        ".ollama/".to_string(),
+        "chatbot/llama.cpp/models/".to_string(),
+        "chatbot/whisper.cpp/models/".to_string(),
+        "whisper.cpp/models/".to_string(),
+        ".local/share/goose/models/".to_string(),
+        ".local/share/ollama-models/".to_string(),
+        "*.gguf".to_string(),
+        "lorraine.shadow".to_string(),
+    ]
 }
 
 impl Config {
@@ -230,6 +252,17 @@ mod tests {
     }
 
     // ── TOML round-trip ───────────────────────────────────────────────────────
+
+    #[test]
+    fn default_excludes_cover_models_and_lorraine_shadow() {
+        let ex = default_excludes();
+        assert!(ex.iter().any(|e| e == "Projects/ComfyUI/models/"));
+        assert!(!ex.iter().any(|e| e == "comfy/ComfyUI/models/"));
+        assert!(ex
+            .iter()
+            .any(|e| e == ".var/app/ai.lmstudio.lm-studio/.lmstudio/models/"));
+        assert!(ex.iter().any(|e| e == "lorraine.shadow"));
+    }
 
     #[test]
     fn config_toml_round_trip_preserves_all_fields() {

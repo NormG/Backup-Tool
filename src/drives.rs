@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::{path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 /// All the information we care about for a single block-device partition.
 #[derive(Debug, Clone)]
@@ -355,6 +355,139 @@ pub fn filesystem_bytes(path: &Path) -> Result<(u64, u64)> {
     Ok((avail, total))
 }
 
+/// Mountpoint of the filesystem containing `path`.
+pub fn filesystem_mountpoint(path: &Path) -> Result<std::path::PathBuf> {
+    let resolved = existing_ancestor(path)?;
+    let out = Command::new("findmnt")
+        .args([
+            "--noheadings",
+            "-o",
+            "TARGET",
+            "--target",
+            resolved.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .with_context(|| format!("running findmnt for {}", path.display()))?;
+
+    if !out.status.success() {
+        bail!(
+            "findmnt failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    let mount = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if mount.is_empty() {
+        bail!("findmnt returned no mountpoint for {}", path.display());
+    }
+    Ok(std::path::PathBuf::from(mount))
+}
+
+/// Empty freedesktop trash directories on the backup volume before space checks.
+///
+/// Targets `.Trash-{uid}` / `.Trash/{uid}` at the filesystem mount root so
+/// deleted snapshots in Nautilus do not inflate `df` used space.
+pub fn empty_volume_trash(path: &Path) -> Result<u64> {
+    let mount = filesystem_mountpoint(path)?;
+    let uid = current_uid()?;
+    empty_user_trash_on_volume(&mount, uid)
+}
+
+fn existing_ancestor(path: &Path) -> Result<std::path::PathBuf> {
+    let mut cur = path;
+    loop {
+        if cur.exists() {
+            return Ok(cur.to_path_buf());
+        }
+        cur = cur
+            .parent()
+            .with_context(|| format!("no existing ancestor for {}", path.display()))?;
+    }
+}
+
+fn current_uid() -> Result<u32> {
+    let out = Command::new("id")
+        .args(["-u"])
+        .output()
+        .context("running id -u")?;
+    if !out.status.success() {
+        bail!(
+            "id -u failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let uid = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u32>()
+        .context("parsing uid from id -u")?;
+    Ok(uid)
+}
+
+fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
+    let mut freed = 0u64;
+    let trash_dirs = [
+        mount_root.join(format!(".Trash-{uid}")),
+        mount_root.join(".Trash").join(uid.to_string()),
+    ];
+
+    for trash_root in &trash_dirs {
+        if trash_root.is_dir() {
+            freed += clear_trash_root(trash_root)?;
+        }
+    }
+
+    Ok(freed)
+}
+
+fn clear_trash_root(trash_root: &Path) -> Result<u64> {
+    let mut freed = 0u64;
+    for sub in ["files", "expunged"] {
+        let dir = trash_root.join(sub);
+        if dir.is_dir() {
+            freed += dir_disk_usage_bytes(&dir).unwrap_or(0);
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    fs::remove_dir_all(&path)
+                        .with_context(|| format!("removing trash directory {}", path.display()))?;
+                } else {
+                    fs::remove_file(&path)
+                        .with_context(|| format!("removing trash file {}", path.display()))?;
+                }
+            }
+        }
+    }
+    Ok(freed)
+}
+
+fn dir_disk_usage_bytes(path: &Path) -> Result<u64> {
+    let out = Command::new("du")
+        .args(["-sb", "--"])
+        .arg(path)
+        .output()
+        .with_context(|| format!("running du on {}", path.display()))?;
+
+    if !out.status.success() {
+        bail!(
+            "du failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    let field = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .context("parsing du output")?
+        .to_string();
+
+    field
+        .parse::<u64>()
+        .with_context(|| format!("parsing du bytes '{field}'"))
+}
+
 /// Find the current mountpoint of a partition with the given UUID by querying
 /// `/proc/mounts`.  Returns `None` if not currently mounted.
 pub fn find_mountpoint_by_uuid(uuid: &str) -> Option<String> {
@@ -367,5 +500,31 @@ pub fn find_mountpoint_by_uuid(uuid: &str) -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_user_trash_on_volume_removes_files_and_expunged() {
+        let mount =
+            std::env::temp_dir().join(format!("backup-tool-trash-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&mount);
+        let trash = mount.join(".Trash-1000");
+        let files = trash.join("files").join("deleted-snapshot");
+        let expunged = trash.join("expunged").join("751706442");
+        fs::create_dir_all(&files).unwrap();
+        fs::create_dir_all(&expunged).unwrap();
+        fs::write(files.join("note.txt"), b"gone").unwrap();
+        fs::write(expunged.join("big.bin"), vec![0u8; 4096]).unwrap();
+
+        let freed = empty_user_trash_on_volume(&mount, 1000).unwrap();
+        assert!(freed >= 4096);
+        assert!(!files.exists());
+        assert!(!expunged.exists());
+
+        let _ = fs::remove_dir_all(mount);
     }
 }

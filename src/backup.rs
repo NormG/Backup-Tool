@@ -82,6 +82,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 1. Ensure the destination directory is reachable ──────────────────
     let dest_root = resolve_dest(config)?;
+    reclaim_backup_drive_trash(&dest_root)?;
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
     let pending_since = if matches!(kind, BackupKind::Auto) {
@@ -377,6 +378,32 @@ fn dir_disk_usage_bytes(path: &Path) -> Result<u64> {
     field
         .parse::<u64>()
         .with_context(|| format!("parsing du bytes '{field}'"))
+}
+
+/// Empty trash on the backup volume; log and continue on failure.
+fn reclaim_backup_drive_trash(dest_root: &Path) -> Result<()> {
+    match drives::empty_volume_trash(dest_root) {
+        Ok(freed) if freed > 0 => {
+            let log_path = Config::log_path();
+            if let Ok(mut log) = open_log_append(&log_path) {
+                log_line(
+                    &mut log,
+                    &format!("Emptied backup-drive trash ({} freed)", format_bytes(freed)),
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            let log_path = Config::log_path();
+            if let Ok(mut log) = open_log_append(&log_path) {
+                log_line(
+                    &mut log,
+                    &format!("WARNING: could not empty backup-drive trash: {e}"),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn open_log_append(log_path: &Path) -> Result<fs::File> {
