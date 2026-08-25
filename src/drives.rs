@@ -425,6 +425,10 @@ fn current_uid() -> Result<u32> {
 }
 
 fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
+    let canon_mount = mount_root
+        .canonicalize()
+        .with_context(|| format!("canonicalizing mount root {}", mount_root.display()))?;
+
     let mut freed = 0u64;
     let trash_dirs = [
         mount_root.join(format!(".Trash-{uid}")),
@@ -432,30 +436,71 @@ fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
     ];
 
     for trash_root in &trash_dirs {
-        if trash_root.is_dir() {
-            freed += clear_trash_root(trash_root)?;
+        if !trash_root.exists() {
+            continue;
         }
+        let meta = fs::symlink_metadata(trash_root)
+            .with_context(|| format!("reading trash metadata {}", trash_root.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+        let canon_trash = trash_root
+            .canonicalize()
+            .with_context(|| format!("canonicalizing trash root {}", trash_root.display()))?;
+        if !canon_trash.starts_with(&canon_mount) {
+            continue;
+        }
+        freed += clear_trash_root(&canon_trash, &canon_mount)?;
     }
 
     Ok(freed)
 }
 
-fn clear_trash_root(trash_root: &Path) -> Result<u64> {
+fn clear_trash_root(trash_root: &Path, mount_root: &Path) -> Result<u64> {
     let mut freed = 0u64;
     for sub in ["files", "expunged"] {
         let dir = trash_root.join(sub);
-        if dir.is_dir() {
-            freed += dir_disk_usage_bytes(&dir).unwrap_or(0);
-            for entry in fs::read_dir(&dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    fs::remove_dir_all(&path)
-                        .with_context(|| format!("removing trash directory {}", path.display()))?;
-                } else {
-                    fs::remove_file(&path)
-                        .with_context(|| format!("removing trash file {}", path.display()))?;
+        if !dir.exists() {
+            continue;
+        }
+        let meta = fs::symlink_metadata(&dir)
+            .with_context(|| format!("reading trash subdir metadata {}", dir.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+        let canon_dir = dir
+            .canonicalize()
+            .with_context(|| format!("canonicalizing trash subdir {}", dir.display()))?;
+        if !canon_dir.starts_with(mount_root) {
+            continue;
+        }
+
+        freed += dir_disk_usage_bytes(&canon_dir).unwrap_or(0);
+        for entry in fs::read_dir(&canon_dir)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if ft.is_dir() {
+                let canon = path
+                    .canonicalize()
+                    .with_context(|| format!("canonicalizing trash entry {}", path.display()))?;
+                if !canon.starts_with(mount_root) {
+                    continue;
                 }
+                fs::remove_dir_all(&canon)
+                    .with_context(|| format!("removing trash directory {}", canon.display()))?;
+            } else if ft.is_file() {
+                let canon = path
+                    .canonicalize()
+                    .with_context(|| format!("canonicalizing trash entry {}", path.display()))?;
+                if !canon.starts_with(mount_root) {
+                    continue;
+                }
+                fs::remove_file(&canon)
+                    .with_context(|| format!("removing trash file {}", canon.display()))?;
             }
         }
     }
@@ -526,5 +571,31 @@ mod tests {
         assert!(!expunged.exists());
 
         let _ = fs::remove_dir_all(mount);
+    }
+
+    #[test]
+    fn empty_user_trash_skips_symlinked_trash_root() {
+        let mount =
+            std::env::temp_dir().join(format!("backup-tool-trash-symlink-{}", std::process::id()));
+        let outside =
+            std::env::temp_dir().join(format!("backup-tool-trash-outside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&mount);
+        let _ = fs::remove_dir_all(&outside);
+
+        fs::create_dir_all(&mount).unwrap();
+        fs::create_dir_all(outside.join("files")).unwrap();
+        fs::write(outside.join("files").join("keep-me.txt"), b"stay").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&outside, mount.join(".Trash-1000")).unwrap();
+        }
+
+        let freed = empty_user_trash_on_volume(&mount, 1000).unwrap();
+        assert_eq!(freed, 0);
+        assert!(outside.join("files").join("keep-me.txt").exists());
+
+        let _ = fs::remove_dir_all(mount);
+        let _ = fs::remove_dir_all(outside);
     }
 }
