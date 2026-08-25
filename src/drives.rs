@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::{fs, path::Path, process::Command};
 
 /// All the information we care about for a single block-device partition.
@@ -430,7 +428,7 @@ fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
     let canon_mount = mount_root
         .canonicalize()
         .with_context(|| format!("canonicalizing mount root {}", mount_root.display()))?;
-    let mount_dev = filesystem_device_id(&canon_mount)?;
+    let volume_mount = filesystem_mountpoint(&canon_mount)?;
 
     let mut freed = 0u64;
     let trash_dirs = [
@@ -450,16 +448,17 @@ fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
         let canon_trash = trash_root
             .canonicalize()
             .with_context(|| format!("canonicalizing trash root {}", trash_root.display()))?;
-        if !canon_trash.starts_with(&canon_mount) || !same_filesystem(&canon_trash, mount_dev)? {
+        if !canon_trash.starts_with(&canon_mount) || !on_volume_mount(&canon_trash, &volume_mount)?
+        {
             continue;
         }
-        freed += clear_trash_root(&canon_trash, &canon_mount, mount_dev)?;
+        freed += clear_trash_root(&canon_trash, &canon_mount, &volume_mount)?;
     }
 
     Ok(freed)
 }
 
-fn clear_trash_root(trash_root: &Path, mount_root: &Path, mount_dev: u64) -> Result<u64> {
+fn clear_trash_root(trash_root: &Path, mount_root: &Path, volume_mount: &Path) -> Result<u64> {
     let mut freed = 0u64;
     for sub in ["files", "expunged"] {
         let dir = trash_root.join(sub);
@@ -474,83 +473,65 @@ fn clear_trash_root(trash_root: &Path, mount_root: &Path, mount_dev: u64) -> Res
         let canon_dir = dir
             .canonicalize()
             .with_context(|| format!("canonicalizing trash subdir {}", dir.display()))?;
-        if !canon_dir.starts_with(mount_root) || !same_filesystem(&canon_dir, mount_dev)? {
+        if !canon_dir.starts_with(mount_root) || !on_volume_mount(&canon_dir, volume_mount)? {
             continue;
         }
 
         freed += dir_disk_usage_bytes(&canon_dir).unwrap_or(0);
         for entry in fs::read_dir(&canon_dir)? {
             let entry = entry?;
-            let ft = entry.file_type()?;
-            if ft.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            if ft.is_dir() {
-                let canon = path
-                    .canonicalize()
-                    .with_context(|| format!("canonicalizing trash entry {}", path.display()))?;
-                if !canon.starts_with(mount_root) || !same_filesystem(&canon, mount_dev)? {
-                    continue;
-                }
-                remove_tree_on_filesystem(&canon, mount_dev)
-                    .with_context(|| format!("removing trash directory {}", canon.display()))?;
-            } else if ft.is_file() {
-                let canon = path
-                    .canonicalize()
-                    .with_context(|| format!("canonicalizing trash entry {}", path.display()))?;
-                if !canon.starts_with(mount_root) || !same_filesystem(&canon, mount_dev)? {
-                    continue;
-                }
-                fs::remove_file(&canon)
-                    .with_context(|| format!("removing trash file {}", canon.display()))?;
-            }
+            let path = canon_dir.join(entry.file_name());
+            remove_trash_entry(&path, volume_mount)
+                .with_context(|| format!("removing trash entry {}", path.display()))?;
         }
     }
     Ok(freed)
 }
 
-fn filesystem_device_id(path: &Path) -> Result<u64> {
-    #[cfg(unix)]
-    {
-        Ok(fs::metadata(path)
-            .with_context(|| format!("reading device id for {}", path.display()))?
-            .dev())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        bail!("trash cleanup requires a Unix filesystem")
-    }
+fn on_volume_mount(path: &Path, volume_mount: &Path) -> Result<bool> {
+    Ok(filesystem_mountpoint(path)? == volume_mount)
 }
 
-fn same_filesystem(path: &Path, mount_dev: u64) -> Result<bool> {
-    Ok(filesystem_device_id(path)? == mount_dev)
+fn remove_trash_entry(path: &Path, volume_mount: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(path)
+        .with_context(|| format!("reading trash entry metadata {}", path.display()))?;
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    if !on_volume_mount(path, volume_mount)? {
+        return Ok(());
+    }
+    if meta.is_dir() {
+        remove_tree_on_volume(path, volume_mount)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
-/// Delete a directory tree without crossing mount/bind boundaries.
-fn remove_tree_on_filesystem(path: &Path, mount_dev: u64) -> Result<()> {
+/// Delete a directory tree without crossing bind mounts or nested filesystems.
+fn remove_tree_on_volume(path: &Path, volume_mount: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)
         .with_context(|| format!("reading metadata for {}", path.display()))?;
     if meta.file_type().is_symlink() {
         return Ok(());
     }
-    #[cfg(unix)]
-    if meta.dev() != mount_dev {
+    if !meta.is_dir() || !on_volume_mount(path, volume_mount)? {
         return Ok(());
     }
-    if meta.is_dir() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            remove_tree_on_filesystem(&entry.path(), mount_dev)?;
-        }
-        let dir_meta = fs::metadata(path)?;
-        #[cfg(unix)]
-        if dir_meta.dev() == mount_dev {
-            fs::remove_dir(path)?;
-        }
-    } else {
-        fs::remove_file(path)?;
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = path.join(entry.file_name());
+        remove_trash_entry(&child, volume_mount)?;
+    }
+
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    if meta.is_dir() && on_volume_mount(path, volume_mount)? {
+        fs::remove_dir(path)?;
     }
     Ok(())
 }
