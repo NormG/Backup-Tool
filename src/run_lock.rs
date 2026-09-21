@@ -1,5 +1,5 @@
 //! Exclusive lock held for the entire backup run to prevent overlapping GUI
-//! and scheduled backups from creating duplicate snapshots.
+//! and scheduled backups from creating duplicate backups.
 
 use anyhow::{Context, Result};
 use fs4::fs_std::FileExt;

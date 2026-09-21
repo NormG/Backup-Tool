@@ -1,8 +1,8 @@
 # Backup-Tool
 
 A GTK4 desktop application for Fedora Linux that backs up your home directory to
-an external drive using **rsync atomic snapshots** and a **systemd user timer**.
-Full and incremental backups are automated; unchanged files across snapshots are
+an external drive using **rsync atomic backups** and a **systemd user timer**.
+Full and incremental backups are automated; unchanged files across backups are
 hardlinked so they consume no extra disk space.
 
 ---
@@ -11,18 +11,18 @@ hardlinked so they consume no extra disk space.
 
 - **GUI install wizard** — choose a backup drive from a live dropdown, set the
   schedule, and review exactly what will be installed before confirming
-- **Atomic snapshots** — backups stage under `.inprogress-*` and are renamed
+- **Atomic backups** — copies stage under `.inprogress-*` and are renamed
   only on success; a partial backup never appears as complete
 - **Hardlinked incrementals** — unchanged files share disk blocks between
-  snapshots via `--link-dest`; only deltas use new space
+  backups via `--link-dest`; only deltas use new space
 - **Automatic drive handling** — if the drive is not mounted at backup time the
   app attempts to mount it by UUID via `udisksctl` (no root required)
 - **Retention policy** — incrementals from the current cycle are removed when
   the next full backup succeeds; orphaned incrementals older than
   `retention_days` are pruned as a safety net if a full is delayed
-- **Full snapshot limit** — keep the newest `keep_full_snapshots` full backups
+- **Full backup limit** — keep the newest `keep_full_snapshots` full backups
   (wizard default 12; `0` = unlimited).  Legacy configs without this field keep
-  all full snapshots until you set a limit in the Schedule tab.
+  all full backups until you set a limit in the Schedule tab.
 - **Exclude patterns** — editable per-line list stored in the config file;
   defaults exclude caches, trash, disc images, and browser data
 - **Systemd user timer** — fully user-level (no root, no cron); survives reboots
@@ -38,7 +38,7 @@ hardlinked so they consume no extra disk space.
 
 | Dependency | Purpose | Install |
 |---|---|---|
-| `rsync` | File transfer and snapshotting | `sudo dnf install rsync` |
+| `rsync` | File transfer and backup copies | `sudo dnf install rsync` |
 | `gtk4-devel` | Build-time GUI toolkit headers | `sudo dnf install gtk4-devel` |
 | `cargo` / Rust ≥ 1.70 | Compile the binary | <https://rustup.rs> |
 | `systemd` (user scope) | Scheduled backups | Already present on Fedora |
@@ -58,7 +58,7 @@ hardlinked so they consume no extra disk space.
 Download and install the pre-built RPM directly — no build tools needed:
 
 ```bash
-sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.10/backup-tool-0.1.10-1.fc44.x86_64.rpm
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.12/backup-tool-0.1.12-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -71,7 +71,7 @@ or when you want to compile from the latest source.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
-sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.10-1.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.12-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -144,7 +144,7 @@ The manager has seven tabs:
 - Full-backup day of week
 - Daily backup time with **12h / 24h toggle** — zero-padded spinbuttons, AM/PM selector
 - Incremental backup period (1 = daily … 7 = weekly)
-- Retention days for orphaned incrementals (safety net) and full snapshot count
+- Retention days for orphaned incrementals (safety net) and full backup count
 - **Save & Reload Timer** rewrites the systemd timer unit and restarts it
 
 ### Excludes
@@ -160,7 +160,7 @@ The manager has seven tabs:
 
 ### Log
 - Shows the content of `~/.local/share/backup-tool/backup.log` (current cycle
-  only; older cycles are archived inside each full snapshot)
+  only; older cycles are archived inside each full backup)
 - **Reload** refreshes the view
 
 ### About
@@ -190,8 +190,8 @@ The same binary is called by systemd when the timer fires:
 
 ```bash
 backup-tool backup auto         # full on configured day, incremental otherwise
-backup-tool backup full         # force a full snapshot
-backup-tool backup incremental  # force an incremental snapshot
+backup-tool backup full         # force a full backup
+backup-tool backup incremental  # force an incremental backup
 ```
 
 Exit codes follow standard UNIX conventions (0 = success, non-zero = error).
@@ -241,7 +241,7 @@ immediately.
 
 ---
 
-## Snapshot Layout
+## Backup layout on drive
 
 ```
 /mnt/home_backups/myhostname/
@@ -250,31 +250,31 @@ immediately.
 ├── inc-2026-07-23_020011/
 │   └── ...
 ├── inc-2026-07-26_020004/
-└── latest -> inc-2026-07-26_020004   ← always points to the newest snapshot
+└── latest -> inc-2026-07-26_020004   ← always points to the newest backup
 ```
 
-Each full snapshot also stores the previous week's operational log at
+Each full backup also stores the previous week's operational log at
 `full-YYYY-MM-DD_HHmmss/.backup-tool/backup.log` (rotated automatically when
-the full succeeds).  Search archived logs alongside the snapshot they describe.
+the full succeeds).  Search archived logs alongside the backup they describe.
 
-Hardlinked files in incremental snapshots appear as complete directories but
+Hardlinked files in incremental backups appear as complete directories but
 share disk blocks with the full (or previous incremental) they were derived from.
 
 **A few things worth knowing about disk usage and pruning:**
 
 - **Incrementals reset on each full** — when a full backup succeeds, all
-  `inc-*` snapshots from the previous cycle are deleted automatically.
+  `inc-*` backups from the previous cycle are deleted automatically.
   Directories that `rsync --archive` copied as read-only (Go module caches are
   0555) get owner rwx before delete; otherwise prune fails with permission
   denied and the incrementals stay.
-- **Full snapshot limit** — only the newest `keep_full_snapshots` full backups
+- **Full backup limit** — only the newest `keep_full_snapshots` full backups
   are kept when set to a positive number (wizard default 12).  Set to `0` to
-  keep all full snapshots.  Upgraded configs omit this field until you save a
+  keep all full backups.  Upgraded configs omit this field until you save a
   limit from the Schedule tab.
 - **Orphan incrementals** — if a scheduled full is delayed, incrementals older
   than `retention_days` are removed as a safety net.
 - **Weekly log rotation** — on each successful full backup, operational log
-  lines (`[timestamp] …`) are archived into that full snapshot under
+  lines (`[timestamp] …`) are archived into that full backup under
   `.backup-tool/backup.log` and the active log is truncated.  Per-file rsync
   detail goes to a temp file that is discarded.
 - **Each full backup is a complete copy** — no hardlinks from previous fulls, so
@@ -350,7 +350,7 @@ systemctl --user disable --now backup-tool.timer
 ```
 
 This disables the timer, removes the binary, launcher, icons, and assets.
-**Your config file and backup snapshots are never deleted.**
+**Your config file and backups on the drive are never deleted.**
 
 To also remove the config:
 
@@ -383,7 +383,7 @@ Backup-Tool/
 │   ├── main.rs          Entry point; CLI argument dispatch
 │   ├── config.rs        Config struct, XDG load/save
 │   ├── drives.rs        lsblk JSON parser, udisksctl mount helpers
-│   ├── backup.rs        rsync execution, snapshot logic, retention
+│   ├── backup.rs        rsync execution, backup logic, retention
 │   ├── systemd.rs       Unit file writer, enable/disable, desktop install
 │   └── ui/
 │       ├── mod.rs        GTK Application bootstrap

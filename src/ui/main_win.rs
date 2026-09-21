@@ -4,17 +4,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{backup, config::Config, systemd};
+use crate::{backup, config::Config, pending_full, systemd};
 use gtk4::{
-    glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, FileChooserAction,
+    gdk, glib, prelude::*, Align, Box as GBox, Button, ComboBoxText, FileChooserAction,
     FileChooserDialog, Frame, Label, ListBox, ListBoxRow, Notebook, Orientation, ResponseType,
-    ScrolledWindow, SelectionMode, SpinButton, Switch, TextView, WrapMode,
+    Revealer, ScrolledWindow, SelectionMode, SpinButton, Switch, TextView, WrapMode,
 };
 
 // ── Entry-point ───────────────────────────────────────────────────────────────
 
 /// Build and show the main backup-manager window.
 pub fn show(app: &gtk4::Application, config: Config) {
+    install_deviation_css();
+
     let cfg = Rc::new(RefCell::new(config));
 
     let win = gtk4::ApplicationWindow::builder()
@@ -24,12 +26,23 @@ pub fn show(app: &gtk4::Application, config: Config) {
         .default_height(460)
         .build();
 
+    let shell = GBox::new(Orientation::Vertical, 0);
+
+    let (deviation_banner, deviation_lbl) = build_deviation_banner();
+    shell.append(&deviation_banner);
+    refresh_deviation_banner(&deviation_banner, &deviation_lbl);
+
     let nb = Notebook::new();
     // Scrollable so all tabs are reachable even when the window is narrow.
     nb.set_scrollable(true);
-    win.set_child(Some(&nb));
+    shell.append(&nb);
+    win.set_child(Some(&shell));
 
-    let (dash_page, status_lbl) = build_dashboard(Rc::clone(&cfg));
+    let (dash_page, status_lbl) = build_dashboard(
+        Rc::clone(&cfg),
+        deviation_banner.clone(),
+        deviation_lbl.clone(),
+    );
     nb.append_page(&dash_page, Some(&Label::new(Some("Dashboard"))));
 
     let sched_page = build_schedule(Rc::clone(&cfg));
@@ -63,9 +76,14 @@ pub fn show(app: &gtk4::Application, config: Config) {
     nb.connect_switch_page(glib::clone!(
         #[weak]
         status_lbl,
+        #[weak]
+        deviation_banner,
+        #[weak]
+        deviation_lbl,
         #[strong]
         cfg,
         move |_, _, page| {
+            refresh_deviation_banner(&deviation_banner, &deviation_lbl);
             if page == 0 {
                 status_lbl.set_text(&status_text(&cfg.borrow()));
             }
@@ -74,6 +92,14 @@ pub fn show(app: &gtk4::Application, config: Config) {
 
     // Initial status.
     status_lbl.set_text(&status_text(&cfg.borrow()));
+
+    {
+        let deviation_banner = deviation_banner.clone();
+        let deviation_lbl = deviation_lbl.clone();
+        win.connect_map(move |_| {
+            refresh_deviation_banner(&deviation_banner, &deviation_lbl);
+        });
+    }
 
     {
         let cfg_for_reminder = cfg.borrow().clone();
@@ -85,9 +111,84 @@ pub fn show(app: &gtk4::Application, config: Config) {
     win.present();
 }
 
+fn install_deviation_css() {
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_data(
+        r#"
+        .deviation-tape {
+            min-height: 44px;
+            background-image: repeating-linear-gradient(
+                -45deg,
+                #111111,
+                #111111 12px,
+                #f5c518 12px,
+                #f5c518 24px
+            );
+        }
+        .deviation-banner-text {
+            padding: 8px 12px;
+            font-weight: bold;
+        }
+        "#,
+    );
+    if let Some(display) = gdk::Display::default() {
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+fn build_deviation_banner() -> (Revealer, Label) {
+    let revealer = Revealer::builder()
+        .reveal_child(false)
+        .transition_type(gtk4::RevealerTransitionType::None)
+        .build();
+
+    let banner = GBox::new(Orientation::Vertical, 0);
+
+    let tape = GBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(vec!["deviation-tape"])
+        .build();
+    banner.append(&tape);
+
+    let lbl = Label::builder()
+        .wrap(true)
+        .halign(Align::Start)
+        .css_classes(vec!["deviation-banner-text"])
+        .build();
+    banner.append(&lbl);
+
+    revealer.set_child(Some(&banner));
+
+    (revealer, lbl)
+}
+
+fn refresh_deviation_banner(banner: &Revealer, lbl: &Label) {
+    match pending_full::schedule_deviation_message() {
+        Ok(Some(msg)) => {
+            lbl.set_text(&msg);
+            banner.set_reveal_child(true);
+        }
+        Ok(None) => banner.set_reveal_child(false),
+        Err(e) => {
+            lbl.set_text(&format!(
+                "SCHEDULE DEVIATION: could not read pending-full state ({e})"
+            ));
+            banner.set_reveal_child(true);
+        }
+    }
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-fn build_dashboard(cfg: Rc<RefCell<Config>>) -> (GBox, Label) {
+fn build_dashboard(
+    cfg: Rc<RefCell<Config>>,
+    deviation_banner: Revealer,
+    deviation_lbl: Label,
+) -> (GBox, Label) {
     let b = tab_box();
 
     b.append(
@@ -129,11 +230,11 @@ fn build_dashboard(cfg: Rc<RefCell<Config>>) -> (GBox, Label) {
     let btn_full = Button::builder()
         .label("Force Full")
         .css_classes(vec!["destructive-action"])
-        .tooltip_text("Always create a full snapshot regardless of day")
+        .tooltip_text("Always create a full backup regardless of day")
         .build();
     let btn_inc = Button::builder()
         .label("Force Incremental")
-        .tooltip_text("Always create a hardlinked incremental snapshot")
+        .tooltip_text("Always create a hardlinked incremental backup")
         .build();
 
     btn_row.append(&btn_auto);
@@ -154,18 +255,24 @@ fn build_dashboard(cfg: Rc<RefCell<Config>>) -> (GBox, Label) {
         backup::BackupKind::Auto,
         Rc::clone(&cfg),
         result_lbl.clone(),
+        deviation_banner.clone(),
+        deviation_lbl.clone(),
     );
     wire_backup_btn(
         &btn_full,
         backup::BackupKind::Full,
         Rc::clone(&cfg),
         result_lbl.clone(),
+        deviation_banner.clone(),
+        deviation_lbl.clone(),
     );
     wire_backup_btn(
         &btn_inc,
         backup::BackupKind::Incremental,
         Rc::clone(&cfg),
         result_lbl.clone(),
+        deviation_banner,
+        deviation_lbl,
     );
 
     // ── Timer toggle ──────────────────────────────────────────────────────
@@ -208,12 +315,18 @@ fn wire_backup_btn(
     kind: backup::BackupKind,
     cfg: Rc<RefCell<Config>>,
     result_lbl: Label,
+    deviation_banner: Revealer,
+    deviation_lbl: Label,
 ) {
     btn.connect_clicked(glib::clone!(
         #[strong]
         result_lbl,
         #[strong]
         cfg,
+        #[strong]
+        deviation_banner,
+        #[strong]
+        deviation_lbl,
         move |b| {
             b.set_sensitive(false);
             result_lbl.set_text("⏳  Running backup — please wait…");
@@ -237,6 +350,10 @@ fn wire_backup_btn(
                     result_lbl,
                     #[strong]
                     b,
+                    #[strong]
+                    deviation_banner,
+                    #[strong]
+                    deviation_lbl,
                     move || {
                         let mut guard = result.lock().unwrap();
                         if let Some(res) = guard.take() {
@@ -246,6 +363,7 @@ fn wire_backup_btn(
                                     result_lbl.set_text(&format!("❌  Backup failed:\n{e}"));
                                 }
                             }
+                            refresh_deviation_banner(&deviation_banner, &deviation_lbl);
                             b.set_sensitive(true);
                             return glib::ControlFlow::Break;
                         }
@@ -278,7 +396,7 @@ fn status_text(cfg: &Config) -> String {
          Drive label     : {}\n\
          Full backup day : {}\n\
          Daily time      : {}\n\
-         Full snapshots  : {}\n\
+         Full backups      : {}\n\
          Inc safety      : {} days\n\
          Timer           : {}\n\
          {}",
@@ -418,7 +536,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
     }
 
     // Retention
-    b.append(&field_label("Keep full snapshots (0 = unlimited):"));
+    b.append(&field_label("Keep full backups (0 = unlimited):"));
     let adj_keep_full = gtk4::Adjustment::new(
         f64::from(cfg.borrow().keep_full_snapshots),
         0.0,
@@ -1956,7 +2074,7 @@ fn build_about() -> GBox {
     let title_col = GBox::new(Orientation::Vertical, 4);
     title_col.append(
         &Label::builder()
-            .label("GTK Backup Manager")
+            .label("Backup-Tool")
             .css_classes(vec!["title-1"])
             .halign(Align::Start)
             .build(),
@@ -1970,7 +2088,7 @@ fn build_about() -> GBox {
     );
     title_col.append(
         &Label::builder()
-            .label("GTK4 home-directory backup manager for Fedora Linux")
+            .label("GTK4 rsync backup manager for Fedora Linux")
             .halign(Align::Start)
             .wrap(true)
             .build(),
@@ -1984,7 +2102,7 @@ fn build_about() -> GBox {
     let details = [
         ("License", "GPL-3.0-or-later"),
         ("Source", "github.com/NormG/Backup-Tool"),
-        ("Backup tool", "rsync (atomic hardlinked snapshots)"),
+        ("Backup tool", "rsync (atomic hardlinked backups)"),
         ("Scheduler", "systemd user timer — no root required"),
         ("Config", "~/.config/backup-tool/config.toml"),
         ("Log", "~/.local/share/backup-tool/backup.log"),

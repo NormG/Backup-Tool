@@ -226,12 +226,12 @@ fn build_dialog_body(config: &Config, usage: &PriorYearUsage) -> String {
     let dest = &config.dest_dir;
     let snapshot_line = if usage.full_count == 0 && usage.inc_count == 0 {
         format!(
-            "No full or incremental snapshots from {} were found under:\n  {dest}",
+            "No full or incremental backups from {} were found under:\n  {dest}",
             usage.archive_year
         )
     } else {
         format!(
-            "{} backups on disk: {} full and {} incremental snapshots, about {} total.",
+            "{} backups on disk: {} full and {} incremental, about {} total.",
             usage.archive_year,
             usage.full_count,
             usage.inc_count,
@@ -255,7 +255,7 @@ fn build_dialog_body(config: &Config, usage: &PriorYearUsage) -> String {
         "It is January — time to review last year's backups.\n\n\
          {snapshot_line}\n\
          {drive_line}\n\n\
-         Consider archiving {year} snapshots to cold storage or moving backups \
+         Consider archiving {year} backups to cold storage or moving backups \
          to a new disk before continuing this year.",
         year = usage.archive_year
     )

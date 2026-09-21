@@ -390,7 +390,7 @@ fn build_welcome() -> GBox {
     b.append(&sub_label(
         "This wizard will guide you through setting up automatic backups \
          of your home directory to an external drive using rsync.\n\n\
-         Backups are atomic point-in-time snapshots stored as:\n\
+         Backups are atomic point-in-time copies stored as:\n\
          • full-YYYY-MM-DD_HHmmss  — weekly full copy\n\
          • inc-YYYY-MM-DD_HHmmss   — daily incremental (hardlinked)\n\n\
          A systemd user timer runs backups automatically at the time you choose.\n\
@@ -469,7 +469,7 @@ fn build_drive(
     // Destination path
     b.append(&section_label("Backup path on drive"));
     b.append(&sub_label(
-        "Path where snapshots will be stored on the chosen partition.\n\
+        "Path where backups will be stored on the chosen partition.\n\
          It will be created if it does not exist.",
     ));
 
@@ -631,7 +631,7 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> SchedulePageWidgets {
     }
 
     // Retention
-    b.append(&sub_label("Keep full snapshots (0 = unlimited):"));
+    b.append(&sub_label("Keep full backups (0 = unlimited):"));
     let adj_keep_full = gtk4::Adjustment::new(
         f64::from(cfg.borrow().keep_full_snapshots),
         0.0,
@@ -789,7 +789,7 @@ fn build_review_text(cfg: &Config) -> String {
          Full backup day   : {}\n\
          Daily time        : {}\n\
          Incrementals      : {inc_desc}\n\
-         Full snapshots    : {keep_full}\n\
+         Full backups      : {keep_full}\n\
          Inc safety        : {} days\n\
          Excludes          : {} patterns\n\n\
          What will be installed:\n\
@@ -870,7 +870,7 @@ if the\n\
              • Full backup every {full_day}\n\
              • Incremental every other day\n\
              • Daily at {time}\n\
-             • Keep {keep_full} full snapshots\n\
+             • Keep {keep_full} full backups\n\
              • Orphan incrementals kept for {ret} days\n\n\
              You can now close this wizard.  The backup timer is active.",
             Config::config_path().display(),

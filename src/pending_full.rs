@@ -147,8 +147,22 @@ pub fn pending_full_since() -> Result<Option<String>> {
     with_lock(|| Ok(PendingFullState::load()?.pending_since))
 }
 
-/// Whether auto mode should retry a deferred full.
-///
+/// Human-readable message for GUI banner and logs when a scheduled full was deferred.
+pub fn schedule_deviation_message() -> Result<Option<String>> {
+    if !pending_full_for_auto()? {
+        return Ok(None);
+    }
+    let since = pending_full_since()?;
+    let since_txt = since
+        .as_deref()
+        .map(|s| format!(" (deferred since {s})"))
+        .unwrap_or_default();
+    Ok(Some(format!(
+        "SCHEDULE DEVIATION: Scheduled full backup could not run — insufficient space{since_txt}. \
+         An incremental ran instead of the expected full. Free space on the backup drive or remove old full backups."
+    )))
+}
+
 /// `pending-full.toml` is authoritative whenever it is readable. The retry
 /// marker is consulted only when the TOML file is missing or quarantined.
 pub fn pending_full_for_auto() -> Result<bool> {

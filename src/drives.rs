@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::{Path, PathBuf}, process::Command};
 
 /// All the information we care about for a single block-device partition.
 #[derive(Debug, Clone)]
@@ -424,10 +424,22 @@ fn current_uid() -> Result<u32> {
     Ok(uid)
 }
 
+fn stable_mount_path(mount_root: &Path) -> Result<PathBuf> {
+    match mount_root.canonicalize() {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            if mount_root.is_absolute() && mount_root.exists() {
+                Ok(mount_root.to_path_buf())
+            } else {
+                Err(e)
+                    .with_context(|| format!("canonicalizing mount root {}", mount_root.display()))
+            }
+        }
+    }
+}
+
 fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
-    let canon_mount = mount_root
-        .canonicalize()
-        .with_context(|| format!("canonicalizing mount root {}", mount_root.display()))?;
+    let canon_mount = stable_mount_path(mount_root)?;
     let volume_mount = filesystem_mountpoint(&canon_mount)?;
 
     let mut freed = 0u64;
@@ -447,7 +459,7 @@ fn empty_user_trash_on_volume(mount_root: &Path, uid: u32) -> Result<u64> {
         }
         let canon_trash = trash_root
             .canonicalize()
-            .with_context(|| format!("canonicalizing trash root {}", trash_root.display()))?;
+            .unwrap_or_else(|_| trash_root.to_path_buf());
         if !canon_trash.starts_with(&canon_mount) || !on_volume_mount(&canon_trash, &volume_mount)?
         {
             continue;

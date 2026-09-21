@@ -13,7 +13,7 @@ use backup::BackupKind;
 use clap::{Parser, Subcommand};
 use config::Config;
 
-/// GTK4 home-directory backup manager using rsync and systemd.
+/// Backup-Tool — GTK4 rsync backup manager using rsync and systemd.
 ///
 /// Run without arguments to open the graphical interface.
 /// Use the `backup` subcommand to run a headless backup from the
@@ -34,22 +34,37 @@ struct Cli {
 enum Commands {
     /// Run a backup without opening the GUI.
     ///
-    /// KIND controls what kind of snapshot is created:
+    /// KIND controls what kind of backup is created:
     ///
     ///   auto         Choose automatically: full on the configured day-of-week
-    ///                or when no full snapshot exists; incremental otherwise.
+    ///                or when no full backup exists; incremental otherwise.
     ///                This is what the systemd timer uses.
     ///
-    ///   full         Always create a full snapshot (every file is copied).
+    ///   full         Always create a full backup (every file is copied).
     ///
-    ///   incremental  Always create an incremental snapshot (only changed
+    ///   incremental  Always create an incremental backup (only changed
     ///                files are copied; unchanged files are hardlinked from
-    ///                the previous snapshot).
+    ///                the previous backup).
     Backup {
         /// Kind of backup to run: auto, full, or incremental (default: auto).
         #[arg(default_value = "auto")]
         kind: String,
     },
+    /// Permanently reclaim space (never trash — direct delete).
+    Prune {
+        #[command(subcommand)]
+        target: PruneTarget,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PruneTarget {
+    /// Permanently delete all inc-* backups on the backup drive.
+    Incs,
+    /// Permanently empty Trash on the backup volume (.Trash-* / Nautilus deletes).
+    Trash,
+    /// Empty backup-volume trash, then vaporize all inc-* backups.
+    All,
 }
 
 fn main() -> Result<()> {
@@ -71,6 +86,26 @@ fn main() -> Result<()> {
 
             let summary = backup::run(&cfg, kind).context("running backup")?;
             println!("{summary}");
+        }
+
+        Some(Commands::Prune { target }) => {
+            let cfg = Config::load().context("loading config")?.with_context(|| {
+                format!(
+                    "No config found at {}. Run the GUI first to set up backups.",
+                    Config::config_path().display()
+                )
+            })?;
+
+            let msg = match target {
+                PruneTarget::Incs => backup::vaporize_incrementals(&cfg),
+                PruneTarget::Trash => backup::vaporize_volume_trash(&cfg),
+                PruneTarget::All => {
+                    let trash = backup::vaporize_volume_trash(&cfg)?;
+                    let incs = backup::vaporize_incrementals(&cfg)?;
+                    Ok(format!("{trash}\n{incs}"))
+                }
+            }?;
+            println!("{msg}");
         }
 
         // ── GUI mode ───────────────────────────────────────────────────────
@@ -153,5 +188,16 @@ mod tests {
     #[test]
     fn cli_extra_positional_arg_is_an_error() {
         assert!(Cli::try_parse_from(["backup-tool", "stray-arg"]).is_err());
+    }
+
+    #[test]
+    fn cli_prune_incs() {
+        let cli = Cli::try_parse_from(["backup-tool", "prune", "incs"]).unwrap();
+        match cli.command {
+            Some(Commands::Prune {
+                target: PruneTarget::Incs,
+            }) => {}
+            _ => panic!("expected prune incs"),
+        }
     }
 }

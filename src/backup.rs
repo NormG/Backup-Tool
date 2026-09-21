@@ -11,19 +11,19 @@ use std::{
 
 use crate::{config::Config, drives, pending_full, run_lock};
 
-/// Which kind of snapshot to create.
+/// Which kind of rsync backup to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackupKind {
-    /// A fresh snapshot — no `--link-dest`, every file is copied.
+    /// A fresh backup — no `--link-dest`, every file is copied.
     Full,
-    /// Uses `--link-dest` pointing at the latest snapshot, hardlinking
+    /// Uses `--link-dest` pointing at the latest backup, hardlinking
     /// unchanged files so only deltas consume additional space.
     Incremental,
     /// Decide automatically: full on the configured day-of-week or when no
-    /// full snapshot exists yet; incremental otherwise.
+    /// full backup exists yet; incremental otherwise.
     Auto,
-    /// The incremental period has not elapsed since the last snapshot;
-    /// exit cleanly without creating a new snapshot.
+    /// The incremental period has not elapsed since the last backup;
+    /// exit cleanly without creating a new backup.
     Skip,
 }
 
@@ -107,7 +107,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     };
     if effective_kind == BackupKind::Skip {
         let msg = format!(
-            "Backup skipped (incremental period {n}d — last snapshot is recent enough).",
+            "Backup skipped (incremental period {n}d — last backup is recent enough).",
             n = config.incremental_every_n_days
         );
         return Ok(msg);
@@ -115,11 +115,13 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 2b. Full backup: prune first, then verify there is room ───────────
     let mut deferred_full = false;
+    let mut defer_space: Option<(u64, u64)> = None;
     let effective_kind = if effective_kind == BackupKind::Full {
         match prepare_full_backup(config, &dest_root)? {
             FullPrep::Proceed => BackupKind::Full,
             FullPrep::DeferredToIncremental { available, needed } => {
                 deferred_full = true;
+                defer_space = Some((available, needed));
                 pending_full::set_pending_full_backup_with_retry(true)?;
                 let msg = format!(
                     "Full backup deferred ({} free, {} needed) — running incremental instead; will retry full on next run.",
@@ -137,7 +139,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 if let Err(e) = pending_full::set_pending_full_backup_with_retry(true) {
                     anyhow::bail!(
                         "Full backup blocked: need {} free but only {} available.\n\
-                         Free space on the backup drive or remove old full-* snapshots, then retry.\n\
+                         Free space on the backup drive or remove old full-* backups, then retry.\n\
                          Could not persist deferred-full retry state: {e}",
                         format_bytes(needed),
                         format_bytes(available),
@@ -145,7 +147,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
                 }
                 return Ok(format!(
                     "Full backup blocked: need {} free but only {} available.\n\
-                     Free space on the backup drive or remove old full-* snapshots, then retry.",
+                     Free space on the backup drive or remove old full-* backups, then retry.",
                     format_bytes(needed),
                     format_bytes(available)
                 ));
@@ -254,7 +256,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     writeln!(
         log_file,
-        "[{log_ts}] Completed {prefix} snapshot: {}",
+        "[{log_ts}] Completed {prefix} backup: {}",
         final_dir.file_name().unwrap_or_default().to_string_lossy()
     )?;
 
@@ -275,7 +277,7 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         prune_all_incrementals(&dest_root, &mut log_file)?;
         apply_full_retention(&dest_root, config.keep_full_snapshots, &mut log_file)?;
         pending_full::clear_pending_after_success().with_context(|| {
-            "full snapshot succeeded but deferred-full state could not be cleared; \
+            "full backup succeeded but deferred-full state could not be cleared; \
              next automatic run may schedule another full"
         })?;
     } else {
@@ -284,10 +286,28 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     }
 
     // ── 11. Desktop notification (best-effort) ─────────────────────────────
-    let _ = notify(
-        "Backup-Tool",
-        &format!("{prefix} snapshot created successfully"),
-    );
+    if deferred_full {
+        let (available, needed) = defer_space.unwrap_or((0, 0));
+        let body = if available > 0 || needed > 0 {
+            format!(
+                "Scheduled full backup could not run ({available} free, {needed} required).\n\
+                 Incremental backup ran instead — this is a deviation from your schedule.\n\
+                 Free space on the backup drive or remove old full backups.",
+                available = format_bytes(available),
+                needed = format_bytes(needed),
+            )
+        } else {
+            "Scheduled full backup could not run (insufficient space).\n\
+             Incremental backup ran instead — this is a deviation from your schedule."
+                .to_string()
+        };
+        let _ = notify_deviation("Backup-Tool — schedule deviation", &body);
+    } else {
+        let _ = notify_success(
+            "Backup-Tool",
+            &format!("{prefix} backup created successfully"),
+        );
+    }
 
     // Build summary string for the GUI.
     let mut summary = build_summary(prefix, &final_dir, &stdout);
@@ -295,6 +315,43 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         summary = format!("⚠️  Scheduled full backup deferred (insufficient space).\n\n{summary}");
     }
     Ok(summary)
+}
+
+/// Permanently delete all `inc-*` backups under the destination (never trash).
+pub fn vaporize_incrementals(config: &Config) -> Result<String> {
+    let dest_root = resolve_dest(config)?;
+    let log_path = Config::log_path();
+    let mut log = open_log_append(&log_path)?;
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+    writeln!(
+        log,
+        "[{ts}] Vaporizing all incremental backups under {}",
+        dest_root.display()
+    )?;
+    prune_all_incrementals(&dest_root, &mut log)?;
+    Ok(format!(
+        "Vaporized all inc-* backups under {} (permanent delete, not trash).",
+        dest_root.display()
+    ))
+}
+
+/// Permanently empty freedesktop trash on the backup volume (Nautilus deletes, etc.).
+pub fn vaporize_volume_trash(config: &Config) -> Result<String> {
+    let dest_root = resolve_dest(config)?;
+    let freed = drives::empty_volume_trash(&dest_root)?;
+    let log_path = Config::log_path();
+    if let Ok(mut log) = open_log_append(&log_path) {
+        let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = writeln!(
+            log,
+            "[{ts}] Vaporized backup-volume trash ({} freed)",
+            format_bytes(freed)
+        );
+    }
+    Ok(format!(
+        "Vaporized backup-volume trash ({} freed).",
+        format_bytes(freed)
+    ))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -430,7 +487,7 @@ fn try_remove_snapshot(path: &Path, name: &str, log: &mut fs::File, context: &st
             &format!("WARNING: could not remove {context} {name}: {e}"),
         );
     } else {
-        log_line(log, &format!("Retention: removed {name}"));
+        log_line(log, &format!("Vaporized {name} ({context})"));
     }
 }
 
@@ -760,7 +817,7 @@ fn prune_all_incrementals(dest_root: &Path, log: &mut fs::File) -> Result<()> {
         if !n.starts_with("inc-") || !entry.path().is_dir() {
             continue;
         }
-        try_remove_snapshot(&entry.path(), &n, log, "incremental snapshot");
+        try_remove_snapshot(&entry.path(), &n, log, "incremental backup");
     }
     Ok(())
 }
@@ -791,7 +848,7 @@ fn apply_full_retention(dest_root: &Path, keep: u32, log: &mut fs::File) -> Resu
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        try_remove_snapshot(&path, &name, log, "old full snapshot");
+        try_remove_snapshot(&path, &name, log, "old full backup");
     }
     Ok(())
 }
@@ -819,17 +876,66 @@ fn apply_retention(dest_root: &Path, retention_days: u32, log: &mut fs::File) ->
             continue;
         };
         if modified < cutoff_sys {
-            try_remove_snapshot(&entry.path(), &n, log, "old snapshot");
+            try_remove_snapshot(&entry.path(), &n, log, "old backup");
         }
     }
     Ok(())
 }
 
-/// Send a desktop notification (best-effort; silently ignored if no display).
-fn notify(title: &str, body: &str) -> Result<()> {
+/// Send a desktop notification for a successful expected backup.
+fn notify_success(title: &str, body: &str) -> Result<()> {
     Command::new("notify-send")
-        .args(["-u", "normal", "-t", "5000", title, body])
+        .args([
+            "-a",
+            "Backup-Tool",
+            "-u",
+            "normal",
+            "-t",
+            "5000",
+            title,
+            body,
+        ])
         .status()?;
+    Ok(())
+}
+
+/// App icon PNG for notify-send (RPM hicolor theme or assets/ next to binary).
+fn app_icon_path() -> Option<PathBuf> {
+    const HICOLOR: &str = "/usr/share/icons/hicolor/128x128/apps/backup-tool.png";
+    if Path::new(HICOLOR).is_file() {
+        return Some(PathBuf::from(HICOLOR));
+    }
+    const SHARE_ASSETS: &str = "/usr/share/backup-tool/assets/backup-tool.png";
+    if Path::new(SHARE_ASSETS).is_file() {
+        return Some(PathBuf::from(SHARE_ASSETS));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let next_to_binary = exe
+            .parent()
+            .map(|d| d.join("assets/backup-tool.png"))
+            .filter(|p| p.is_file());
+        if next_to_binary.is_some() {
+            return next_to_binary;
+        }
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/backup-tool.png");
+    dev.is_file().then_some(dev)
+}
+
+/// Send a high-visibility notification when reality deviates from the schedule.
+fn notify_deviation(title: &str, body: &str) -> Result<()> {
+    let mut cmd = Command::new("notify-send");
+    cmd.args(["-a", "Backup-Tool", "-u", "critical", "-t", "30000"]);
+    match app_icon_path() {
+        Some(icon) => {
+            cmd.arg("-i").arg(icon);
+        }
+        None => {
+            cmd.arg("-i").arg("backup-tool");
+        }
+    }
+    cmd.arg(title).arg(body);
+    cmd.status()?;
     Ok(())
 }
 
@@ -890,6 +996,14 @@ mod tests {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(1), "1 B");
         assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn app_icon_path_exists_in_repo() {
+        assert!(
+            app_icon_path().is_some(),
+            "assets/backup-tool.png must ship with the project"
+        );
     }
 
     #[test]
@@ -1339,5 +1453,5 @@ fn build_summary(prefix: &str, final_dir: &Path, rsync_stdout: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!("✅  {prefix} snapshot complete\nSnapshot: {name}\n\n{stats}")
+    format!("✅  {prefix} backup complete\nBackup: {name}\n\n{stats}")
 }

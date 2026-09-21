@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub struct Config {
     /// Absolute path of the directory to back up.
     pub source_dir: String,
-    /// Absolute path on the backup drive where snapshots are written.
+    /// Absolute path on the backup drive where backups are written.
     pub dest_dir: String,
     /// Filesystem UUID of the backup partition (used for auto-mount).
     pub drive_uuid: Option<String>,
@@ -27,7 +27,7 @@ pub struct Config {
     /// Old config files that omit this field default to 1.
     #[serde(default = "default_one")]
     pub incremental_every_n_days: u32,
-    /// How many full snapshots to keep on the backup drive (0 = unlimited).
+    /// How many full backups to keep on the backup drive (0 = unlimited).
     /// When a new full succeeds, older full-* directories beyond this count
     /// are deleted automatically.  Omitted in legacy configs defaults to 0
     /// (unlimited); new installs via the wizard use 12.

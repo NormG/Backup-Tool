@@ -131,7 +131,7 @@ pub fn timer_status_line() -> String {
 fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
     let svc = format!(
         "[Unit]\n\
-         Description=Home Directory Backup\n\
+         Description=Backup-Tool automatic backup\n\
          Documentation=file://{data_dir}/backup.log\n\
          After=default.target\n\
          \n\
@@ -228,7 +228,7 @@ fn manage_nautilus_bookmark(dest_dir: &str) -> Result<()> {
 
     // Append the fresh entry.  The label shown in the sidebar follows the URI.
     let dest_uri = format!("file://{dest_dir}");
-    let new_line = format!("{dest_uri} Home Backups");
+    let new_line = format!("{dest_uri} Backup-Tool");
 
     let mut output = filtered.join("\n");
     if !output.is_empty() && !output.ends_with('\n') {
@@ -285,7 +285,7 @@ fn install_desktop_files(bin: &str, log: &mut Vec<String>) -> Result<()> {
     let desktop_content = format!(
         "[Desktop Entry]\n\
          Name=Backup-Tool\n\
-         Comment=Manage home-directory rsync backups\n\
+         Comment=Backup-Tool — rsync backups to an external drive\n\
          Exec={bin}\n\
          Icon=backup-tool\n\
          Terminal=false\n\
@@ -328,6 +328,10 @@ mod tests {
         assert!(
             !svc.contains("--backup"),
             "legacy --backup flag must not appear in generated unit"
+        );
+        assert!(
+            svc.contains("Description=Backup-Tool automatic backup"),
+            "unexpected service Description:\n{svc}"
         );
 
         let _ = fs::remove_dir_all(dir);
