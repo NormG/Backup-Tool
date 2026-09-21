@@ -16,7 +16,8 @@ hardlinked so they consume no extra disk space.
 - **Hardlinked incrementals** — unchanged files share disk blocks between
   backups via `--link-dest`; only deltas use new space
 - **Automatic drive handling** — if the drive is not mounted at backup time the
-  app attempts to mount it by UUID via `udisksctl` (no root required)
+  app attempts to mount it by UUID via `udisksctl` (no root required). Btrfs
+  volumes are mounted with `compress-force=zstd:3` so rsync writes pack on disk.
 - **Retention policy** — incrementals from the current cycle are removed when
   the next full backup succeeds; orphaned incrementals older than
   `retention_days` are pruned as a safety net if a full is delayed
@@ -58,7 +59,7 @@ hardlinked so they consume no extra disk space.
 Download and install the pre-built RPM directly — no build tools needed:
 
 ```bash
-sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.12/backup-tool-0.1.12-1.fc44.x86_64.rpm
+sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.13/backup-tool-0.1.13-1.fc44.x86_64.rpm
 backup-tool
 ```
 
@@ -71,7 +72,7 @@ or when you want to compile from the latest source.
 git clone https://github.com/NormG/Backup-Tool
 cd Backup-Tool
 rm -rf vendor && ./package-rpm.sh        # clean build — ~3 min
-sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.12-1.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/backup-tool-0.1.13-1.fc44.x86_64.rpm
 backup-tool
 ```
 

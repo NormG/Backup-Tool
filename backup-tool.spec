@@ -2,7 +2,7 @@
 #   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
 #   Distribute the public key alongside the .rpm for user verification.
 Name:           backup-tool
-Version:        0.1.12
+Version:        0.1.13
 Release:        1%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
@@ -185,6 +185,10 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Mon Sep 21 2026 norm <norm@localhost> - 0.1.13-1
+- Btrfs backup dest: mount with compress-force=zstd:3; set zstd property + chattr +c
+- Create dest dir after UUID auto-mount even when path is under the mountpoint
+
 * Sun Aug 30 2026 norm <norm@localhost> - 0.1.12-1
 - About tab: Backup-Tool title; drop home-directory from subtitle and .desktop
 

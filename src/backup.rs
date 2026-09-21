@@ -82,6 +82,13 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
 
     // ── 1. Ensure the destination directory is reachable ──────────────────
     let dest_root = resolve_dest(config)?;
+    if let Some(msg) = drives::enable_btrfs_dest_compression(&dest_root) {
+        let log_path = Config::log_path();
+        if let Ok(mut log) = open_log_append(&log_path) {
+            let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(log, "[{ts}] {msg}");
+        }
+    }
     reclaim_backup_drive_trash(&dest_root)?;
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
@@ -598,15 +605,10 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
             return Ok(dest.to_path_buf());
         }
 
-        let mp =
+        let _mp =
             drives::mount_by_uuid(uuid).with_context(|| format!("auto-mounting UUID {uuid}"))?;
 
-        let candidate = PathBuf::from(&mp);
-        if !dest.starts_with(&candidate) {
-            // dest_dir is an absolute path on the drive; create it.
-            fs::create_dir_all(dest).with_context(|| "creating dest dir after mount")?;
-        }
-
+        fs::create_dir_all(dest).with_context(|| "creating dest dir after mount")?;
         if dest.exists() {
             return Ok(dest.to_path_buf());
         }
