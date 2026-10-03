@@ -146,7 +146,6 @@ Fix **today:** `notify-send -u critical` when `deferred_full`; body must lead wi
 | PKG-1 | Man pages | |
 | PKG-2 | Debian VM setup | Debian 13 primary |
 | PKG-3 | debian/ + package-deb.sh | After PKG-2 |
-| PKG-4 | GPG signing + publish keys | RPM + deb; checksums on release |
 | PKG-5 | GitHub release artifacts | Depends PKG-3, PKG-4 |
 
 #### Ready
@@ -155,7 +154,13 @@ Fix **today:** `notify-send -u critical` when `deferred_full`; body must lead wi
 |----|------|-------|
 | PKG-2 | Debian VM setup | VMs exist; toolchain not verified yet |
 
-#### In Progress / Review / Done
+#### In Progress
+
+| ID | Card | Notes |
+|----|------|-------|
+| PKG-4 | GPG signing + publish keys | RPM signing key on verona1; `rpm-sign` not installed yet; `.deb` signing still open |
+
+#### Review / Done
 
 *(empty — pick up PKG-2 when BLC or Monday backup is settled)*
 

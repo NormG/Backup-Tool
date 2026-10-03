@@ -1,6 +1,8 @@
-# TODO: Add GPG signing key once a key pair is generated.
-#   rpm --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
-#   Distribute the public key alongside the .rpm for user verification.
+# Signed with Backup-Tool RPM key (see packaging/backup-tool.gpg.asc).
+#   sudo dnf install rpm-sign
+#   rpmsign --addsign ~/rpmbuild/RPMS/x86_64/backup-tool-*.rpm
+#   sudo rpmkeys --import packaging/backup-tool.gpg.asc
+#   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
 Release:        1%{?dist}

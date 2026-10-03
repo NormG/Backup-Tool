@@ -63,6 +63,17 @@ sudo dnf install https://github.com/NormG/Backup-Tool/releases/download/v0.1.13/
 backup-tool
 ```
 
+Releases are signed with the Backup-Tool RPM key (fingerprint
+`47DD 4557 7958 4B0E 2EFC  482E 2973 1FD9 8E42 2D05`). Import it once, then
+check a downloaded RPM:
+
+```bash
+sudo rpmkeys --import https://raw.githubusercontent.com/NormG/Backup-Tool/master/packaging/backup-tool.gpg.asc
+rpm -K backup-tool-*.rpm
+```
+
+Pass is `digests signatures OK`.
+
 ### Option B — Build RPM from source
 
 Required when the pre-built RPM is not available for your Fedora release,
@@ -82,7 +93,7 @@ backup-tool
 > contains exactly what is in the repository.
 
 Build requirements: `cargo`, `gtk4-devel`, `pkgconf-pkg-config`,
-`rpm-build`, `rpmdevtools`.
+`rpm-build`, `rpmdevtools`. Signing a release also needs `rpm-sign`.
 
 ### Uninstall
 
@@ -406,3 +417,14 @@ Backup-Tool/
 ## License
 
 GPL-3.0-or-later
+
+## Fix for Mounting Issues
+
+This tool has been modified to prevent mounting issues when running via systemd. The fix ensures that:
+
+1. The backup tool checks if the destination path already exists
+2. If it exists, the tool proceeds with the backup without attempting to mount
+3. If it doesn't exist, the tool checks if the drive is already mounted by UUID
+4. Only attempts to mount if the drive is not already mounted
+
+This prevents the polkit authorization errors that occur when systemd user services try to mount drives without user interaction.

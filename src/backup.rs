@@ -586,15 +586,17 @@ fn format_bytes(n: u64) -> String {
 /// needed.  Returns the resolved `PathBuf`.
 fn resolve_dest(config: &Config) -> Result<PathBuf> {
     let dest = Path::new(&config.dest_dir);
+    
+    // Check if destination already exists
     if dest.exists() {
         return Ok(dest.to_path_buf());
     }
-
-    // Try mounting by UUID.
+    
+    // If not, check if the drive is already mounted by UUID
     if let Some(uuid) = &config.drive_uuid {
-        // Already mounted?
+        // Check if drive is already mounted
         if let Some(mp) = drives::find_mountpoint_by_uuid(uuid) {
-            // dest might be a subdirectory on the drive.
+            // Drive is already mounted, check if our destination path exists
             let candidate = PathBuf::from(&mp).join(dest.strip_prefix("/").unwrap_or(dest));
             if candidate.exists() {
                 return Ok(dest.to_path_buf());
@@ -604,7 +606,8 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
                 .with_context(|| format!("creating dest dir {}", dest.display()))?;
             return Ok(dest.to_path_buf());
         }
-
+        
+        // Drive is not mounted, so mount it
         let _mp =
             drives::mount_by_uuid(uuid).with_context(|| format!("auto-mounting UUID {uuid}"))?;
 

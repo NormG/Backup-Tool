@@ -96,6 +96,20 @@ rpmbuild -ba \
     --define "dist .fc$(rpm -E '%{fedora}')" \
     ~/rpmbuild/SPECS/${NAME}.spec 2>&1
 
+# ── Sign (needs rpm-sign + %_openpgp_sign_id in ~/.rpmmacros) ────────────────
+BIN_RPM=$(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" ! -name '*debug*' | sort | head -1)
+SIGN_ID=$(rpm --eval '%{?_openpgp_sign_id}')
+if [[ -n "${BIN_RPM}" && -n "${SIGN_ID}" ]] && command -v rpmsign &>/dev/null; then
+    step "Signing ${BIN_RPM}…"
+    rpmsign --addsign "${BIN_RPM}"
+    ok "Signed with ${SIGN_ID}"
+elif [[ -n "${SIGN_ID}" ]]; then
+    warn "Key is configured but rpmsign is missing.  Install with: sudo dnf install rpm-sign"
+    warn "Then: rpmsign --addsign ${BIN_RPM}"
+else
+    warn "No %_openpgp_sign_id in rpm macros — RPM left unsigned"
+fi
+
 # ── Results ───────────────────────────────────────────────────────────────────
 echo
 printf "${G}═══════════════════════════════════════════════${X}\n"
@@ -109,7 +123,11 @@ echo "  Source RPM:"
 find ~/rpmbuild/SRPMS -name "${NAME}-${VERSION}*.rpm" | sort | sed 's/^/    /'
 echo
 echo "  Install:"
-echo "    sudo dnf install $(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" | head -1)"
+echo "    sudo dnf install $(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" ! -name '*debug*' | sort | head -1)"
+echo
+echo "  Verify signature:"
+echo "    sudo rpmkeys --import ${SCRIPT_DIR}/packaging/backup-tool.gpg.asc"
+echo "    rpm -K $(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" ! -name '*debug*' | sort | head -1)"
 echo
 echo "  Or to test without installing:"
-echo "    rpm -qpl $(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" | head -1)"
+echo "    rpm -qpl $(find ~/rpmbuild/RPMS -name "${NAME}-${VERSION}*.rpm" ! -name '*debug*' | sort | head -1)"
