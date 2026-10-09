@@ -21,7 +21,12 @@ hardlinked so they consume no extra disk space.
   (see [Btrfs compression](#btrfs-compression)).
 - **Unattended mounting** — the RPM ships a polkit rule and a `backup-tool`
   group; members may mount the backup drive from the systemd timer without a
-  prompt (`sudo usermod -aG backup-tool <user>`).
+  prompt (`sudo usermod -aG backup-tool <user>`).  The rule grants only
+  `udisks2.filesystem-mount` (external/removable drives); devices udisks2
+  classifies as system devices (`filesystem-mount-system`, e.g. internal disks)
+  still require administrator authentication.  If your backup drive is such an
+  internal disk, add your own local rule for that device in
+  `/etc/polkit-1/rules.d/`.
 - **Retention policy** — incrementals from the current cycle are removed when
   the next full backup succeeds; orphaned incrementals older than
   `retention_days` are pruned as a safety net if a full is delayed
@@ -298,9 +303,10 @@ share disk blocks with the full (or previous incremental) they were derived from
   every file is re-read and compared by content (so a silently corrupted copy on
   the backup drive is replaced), but unchanged data stays hardlinked and only
   changed data is written.  A full therefore needs about the same free space as
-  an incremental (roughly 2% of the drive, minimum 10 GiB), not a second
-  complete copy.  It does take longer because both sides are read in full.
-  Only the very first full backup (no earlier snapshot) is a plain complete copy.
+  an incremental (roughly 2% of the drive, with a floor of 10 GiB or 10% of the
+  drive, whichever is smaller), not a second complete copy.  It does take longer
+  because both sides are read in full.  Only the very first full backup (no
+  earlier snapshot) is a plain complete copy.
 
 ---
 

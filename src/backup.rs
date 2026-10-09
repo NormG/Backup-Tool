@@ -390,10 +390,13 @@ fn link_dest_args(kind: BackupKind, latest: Option<&Path>) -> Vec<String> {
 
 /// A hardlinked full backup only writes files that changed since the latest
 /// snapshot, so it needs about as much room as an incremental. Reserve this
-/// fraction of the volume (never less than [`HARDLINK_FULL_MIN_BYTES`]) as
-/// headroom for that delta.
+/// fraction of the volume as headroom for that delta, but never less than
+/// [`HARDLINK_FULL_MIN_BYTES`] -- and never more than
+/// [`HARDLINK_FULL_MIN_FRACTION`] of the volume, so small drives (where a fixed
+/// 10 GiB floor would exceed the whole drive) can still complete fulls.
 const HARDLINK_FULL_HEADROOM_FRACTION: f64 = 0.02;
 const HARDLINK_FULL_MIN_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const HARDLINK_FULL_MIN_FRACTION: f64 = 0.10;
 
 /// Minimum free space to start the very first (non-hardlinked) full backup.
 const FRESH_FULL_MIN_BYTES: u64 = 1024 * 1024 * 1024;
@@ -454,7 +457,9 @@ fn full_backup_bytes_needed(dest_root: &Path, volume_total: u64) -> u64 {
 
 fn hardlinked_full_bytes_needed(volume_total: u64) -> u64 {
     let headroom = (volume_total as f64 * HARDLINK_FULL_HEADROOM_FRACTION).ceil() as u64;
-    headroom.max(HARDLINK_FULL_MIN_BYTES)
+    let floor = HARDLINK_FULL_MIN_BYTES
+        .min((volume_total as f64 * HARDLINK_FULL_MIN_FRACTION).ceil() as u64);
+    headroom.max(floor)
 }
 
 /// Empty trash on the backup volume; log and continue on failure.
@@ -1265,6 +1270,26 @@ mod tests {
         // estimate demanded.
         let needed = hardlinked_full_bytes_needed(931 * GIB);
         assert!(needed > 10 * GIB && needed < 30 * GIB, "needed={needed}");
+    }
+
+    #[test]
+    fn hardlinked_full_floor_scales_down_for_small_drives() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        const MIB: u64 = 1024 * 1024;
+        // 8 GiB drive holding a ~500 MiB backup: ~7.5 GiB is free and nothing
+        // changed, so the full must be allowed (a fixed 10 GiB floor would
+        // defer it forever).
+        let total = 8 * GIB;
+        let needed = hardlinked_full_bytes_needed(total);
+        assert!(needed <= total / 10 + MIB, "needed={needed}");
+        assert!(7 * GIB + 512 * MIB >= needed, "free space must satisfy it");
+        // Never demands more than the whole drive, however small.
+        for total in [64 * MIB, 512 * MIB, GIB, 4 * GIB] {
+            assert!(hardlinked_full_bytes_needed(total) < total, "total={total}");
+        }
+        // The 10 GiB floor still applies from 100 GiB up.
+        assert_eq!(hardlinked_full_bytes_needed(100 * GIB), 10 * GIB);
+        assert_eq!(hardlinked_full_bytes_needed(500 * GIB), 10 * GIB);
     }
 
     #[test]

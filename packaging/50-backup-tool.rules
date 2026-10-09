@@ -7,11 +7,22 @@
 // which fails with "Not authorized to perform operation" because there is no
 // polkit agent to answer the prompt.
 //
-// Only mounting is granted -- not unmounting, formatting, or other udisks2
-// actions. Add a user with:  sudo usermod -aG backup-tool <user>
+// Scope is deliberately narrow:
+//  - Only org.freedesktop.udisks2.filesystem-mount is granted. udisks2 asks for
+//    filesystem-mount-system instead for devices it classifies as system
+//    devices (HintSystem=true: internal disks, anything in fstab), so those are
+//    NOT covered and still need administrator authentication. This rule only
+//    extends to unattended runs what an active local session already gets for
+//    external/removable drives.
+//  - Unmount, eject, format and every other udisks2 action are not granted.
+//
+// If your backup drive is an internal disk that udisks2 treats as a system
+// device, add a separate local rule for it (match action.lookup("device")) in
+// /etc/polkit-1/rules.d/ rather than widening this one.
+//
+// Add a user with:  sudo usermod -aG backup-tool <user>
 polkit.addRule(function(action, subject) {
-    if ((action.id == "org.freedesktop.udisks2.filesystem-mount" ||
-         action.id == "org.freedesktop.udisks2.filesystem-mount-system") &&
+    if (action.id == "org.freedesktop.udisks2.filesystem-mount" &&
         subject.isInGroup("backup-tool")) {
         return polkit.Result.YES;
     }

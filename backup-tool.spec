@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -211,6 +211,12 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Fri Oct 09 2026 norm <norm@localhost> - 0.1.13-4
+- polkit rule: grant only udisks2 filesystem-mount; drop filesystem-mount-system
+  so group members cannot mount internal/system devices without admin auth
+- Hardlinked-full space floor is min(10 GiB, 10%% of the drive) so drives under
+  10 GiB can still complete full backups
+
 * Fri Oct 09 2026 norm <norm@localhost> - 0.1.13-3
 - Full backups no longer need a second complete copy: with a previous snapshot
   they run rsync --link-dest + --checksum (hardlinked, content-verified, only
