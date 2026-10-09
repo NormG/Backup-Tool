@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -211,6 +211,19 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Fri Oct 09 2026 norm <norm@localhost> - 0.1.13-3
+- Full backups no longer need a second complete copy: with a previous snapshot
+  they run rsync --link-dest + --checksum (hardlinked, content-verified, only
+  changed data written); space check sized for the delta (~2%% of drive, min
+  10 GiB) instead of 110%% of the latest snapshot's apparent size
+- Btrfs compression: auto-mount now actually passes compress-force=zstd:3
+  (filesystem type came from blkid, which returns nothing for non-root users;
+  now lsblk, with /dev/disk/by-uuid device lookup)
+- Btrfs compression: stop running chattr +c, which reset the destination's
+  compression property to zlib; verify and log the property and mount options
+- GUI Btrfs send auto-mount reuses drives::mount_by_uuid
+- README: document hardlinked fulls, compression, and manual recompression
+
 * Fri Oct 09 2026 norm <norm@localhost> - 0.1.13-2
 - Fix unattended auto-mount failing with "Not authorized to perform operation":
   ship a polkit rule (50-backup-tool.rules) allowing the backup-tool group to

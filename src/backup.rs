@@ -212,12 +212,19 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     let rsync_log = Config::data_dir().join(format!("rsync-{stamp}.log"));
     cmd.arg(format!("--log-file={}", rsync_log.display()));
 
-    // For incrementals: hardlink unchanged files from the latest snapshot.
-    if effective_kind == BackupKind::Incremental {
-        if let Some(link) = resolve_latest(&dest_root) {
-            cmd.arg(format!("--link-dest={}", link.display()));
-        }
+    // Hardlink unchanged files from the latest snapshot. A full backup also
+    // re-verifies every file by checksum, but still only writes what changed,
+    // so it never needs a second complete copy on the backup drive.
+    let latest = resolve_latest(&dest_root);
+    let link_args = link_dest_args(effective_kind, latest.as_deref());
+    if effective_kind == BackupKind::Full && !link_args.is_empty() {
+        writeln!(
+            log_file,
+            "[{log_ts}] Full backup is hardlinked to the latest snapshot and \
+             checksum-verified (only changed data is written)"
+        )?;
     }
+    cmd.args(&link_args);
 
     let source = format!("{}/", config.source_dir);
     cmd.arg(&source);
@@ -363,8 +370,33 @@ pub fn vaporize_volume_trash(config: &Config) -> Result<String> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Safety margin applied when comparing free space to the latest snapshot size.
-const FULL_BACKUP_SPACE_MARGIN: f64 = 1.10;
+/// Extra rsync arguments that tie a new snapshot to the previous one.
+///
+/// - Incremental: `--link-dest` to the latest snapshot.
+/// - Full with a previous snapshot: the same, plus `--checksum` so every file
+///   is re-read and compared by content (catching silent corruption of the
+///   hardlinked copy) while unchanged data stays hardlinked.
+/// - No previous snapshot: nothing, i.e. a plain complete copy.
+fn link_dest_args(kind: BackupKind, latest: Option<&Path>) -> Vec<String> {
+    let Some(link) = latest else {
+        return Vec::new();
+    };
+    let mut args = vec![format!("--link-dest={}", link.display())];
+    if kind == BackupKind::Full {
+        args.push("--checksum".to_string());
+    }
+    args
+}
+
+/// A hardlinked full backup only writes files that changed since the latest
+/// snapshot, so it needs about as much room as an incremental. Reserve this
+/// fraction of the volume (never less than [`HARDLINK_FULL_MIN_BYTES`]) as
+/// headroom for that delta.
+const HARDLINK_FULL_HEADROOM_FRACTION: f64 = 0.02;
+const HARDLINK_FULL_MIN_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Minimum free space to start the very first (non-hardlinked) full backup.
+const FRESH_FULL_MIN_BYTES: u64 = 1024 * 1024 * 1024;
 
 enum FullPrep {
     Proceed,
@@ -378,8 +410,8 @@ fn prepare_full_backup(_config: &Config, dest_root: &Path) -> Result<FullPrep> {
     let log_path = Config::log_path();
     let mut log = open_log_append(&log_path)?;
 
-    let available = drives::available_bytes(dest_root)?;
-    let needed = full_backup_bytes_needed(dest_root)?;
+    let (available, volume_total) = drives::filesystem_bytes(dest_root)?;
+    let needed = full_backup_bytes_needed(dest_root, volume_total);
 
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
     if available >= needed {
@@ -406,42 +438,23 @@ fn prepare_full_backup(_config: &Config, dest_root: &Path) -> Result<FullPrep> {
     }
 }
 
-/// Estimate bytes required for a new full snapshot, based on the latest
-/// snapshot size with a safety margin.  When no snapshot exists yet, require
-/// at least 1 GiB as a minimal sanity check.
-fn full_backup_bytes_needed(dest_root: &Path) -> Result<u64> {
-    if let Some(latest) = resolve_latest(dest_root) {
-        let bytes = dir_disk_usage_bytes(&latest)?;
-        Ok((bytes as f64 * FULL_BACKUP_SPACE_MARGIN).ceil() as u64)
+/// Bytes of free space required to start a full backup.
+///
+/// With a previous snapshot the full is hardlinked (see [`link_dest_args`]) and
+/// only needs room for changed data; the old estimate (110% of the latest
+/// snapshot's apparent size, ignoring both compression and hardlinks) demanded
+/// a second complete copy and could never pass on a drive this full.
+fn full_backup_bytes_needed(dest_root: &Path, volume_total: u64) -> u64 {
+    if resolve_latest(dest_root).is_some() {
+        hardlinked_full_bytes_needed(volume_total)
     } else {
-        Ok(1024 * 1024 * 1024)
+        FRESH_FULL_MIN_BYTES
     }
 }
 
-fn dir_disk_usage_bytes(path: &Path) -> Result<u64> {
-    let out = Command::new("du")
-        .args(["-sb", "--"])
-        .arg(path)
-        .output()
-        .with_context(|| format!("running du on {}", path.display()))?;
-
-    if !out.status.success() {
-        bail!(
-            "du failed for {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-
-    let field = String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .context("parsing du output")?
-        .to_string();
-
-    field
-        .parse::<u64>()
-        .with_context(|| format!("parsing du bytes '{field}'"))
+fn hardlinked_full_bytes_needed(volume_total: u64) -> u64 {
+    let headroom = (volume_total as f64 * HARDLINK_FULL_HEADROOM_FRACTION).ceil() as u64;
+    headroom.max(HARDLINK_FULL_MIN_BYTES)
 }
 
 /// Empty trash on the backup volume; log and continue on failure.
@@ -1208,6 +1221,70 @@ mod tests {
         assert_eq!(
             auto_kind(&cfg, &dir, false).unwrap(),
             BackupKind::Incremental
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── link_dest_args / full-backup space estimate ───────────────────────────
+
+    #[test]
+    fn link_dest_args_incremental_hardlinks_without_checksum() {
+        let latest = Path::new("/mnt/backup/inc-2024-01-01_120000");
+        let args = link_dest_args(BackupKind::Incremental, Some(latest));
+        assert_eq!(
+            args,
+            ["--link-dest=/mnt/backup/inc-2024-01-01_120000".to_string()]
+        );
+    }
+
+    #[test]
+    fn link_dest_args_full_hardlinks_and_verifies_by_checksum() {
+        let latest = Path::new("/mnt/backup/full-2024-01-01_120000");
+        let args = link_dest_args(BackupKind::Full, Some(latest));
+        assert_eq!(
+            args,
+            [
+                "--link-dest=/mnt/backup/full-2024-01-01_120000".to_string(),
+                "--checksum".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn link_dest_args_empty_when_no_previous_snapshot() {
+        assert!(link_dest_args(BackupKind::Full, None).is_empty());
+        assert!(link_dest_args(BackupKind::Incremental, None).is_empty());
+    }
+
+    #[test]
+    fn hardlinked_full_needs_headroom_not_a_second_copy() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // Small volume: the floor applies.
+        assert_eq!(hardlinked_full_bytes_needed(100 * GIB), 10 * GIB);
+        // 931 GiB drive: ~2% headroom, nowhere near the 700+ GiB the old
+        // estimate demanded.
+        let needed = hardlinked_full_bytes_needed(931 * GIB);
+        assert!(needed > 10 * GIB && needed < 30 * GIB, "needed={needed}");
+    }
+
+    #[test]
+    fn full_backup_bytes_needed_uses_floor_when_no_snapshot_exists() {
+        let dir = tmp_dir("full-needed-fresh");
+        assert_eq!(
+            full_backup_bytes_needed(&dir, 931 * 1024 * 1024 * 1024),
+            FRESH_FULL_MIN_BYTES
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn full_backup_bytes_needed_is_small_when_a_snapshot_exists() {
+        let dir = tmp_dir("full-needed-hardlinked");
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        let total = 931u64 * 1024 * 1024 * 1024;
+        assert_eq!(
+            full_backup_bytes_needed(&dir, total),
+            hardlinked_full_bytes_needed(total)
         );
         fs::remove_dir_all(&dir).unwrap();
     }

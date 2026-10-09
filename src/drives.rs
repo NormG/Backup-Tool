@@ -191,6 +191,72 @@ pub fn extra_mount_options_for_fstype(fstype: &str) -> Option<&'static str> {
     }
 }
 
+/// Resolve a filesystem UUID to a block-device path.
+///
+/// Prefers udev's `/dev/disk/by-uuid` symlink, which is world-readable and
+/// needs no access to the device node, then falls back to `blkid -U`.
+fn device_for_uuid(uuid: &str) -> Result<String> {
+    // UUIDs are hex plus dashes (or FAT-style `XXXX-XXXX`); never allow path
+    // components to leak into the by-uuid lookup.
+    if !uuid.is_empty() && uuid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        if let Ok(real) = fs::canonicalize(Path::new("/dev/disk/by-uuid").join(uuid)) {
+            return Ok(real.to_string_lossy().into_owned());
+        }
+    }
+
+    let dev_out = Command::new("blkid")
+        .args(["-U", uuid])
+        .output()
+        .context("running blkid")?;
+    if !dev_out.status.success() {
+        bail!("blkid could not find a device with UUID {uuid}");
+    }
+    let device = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
+    if device.is_empty() {
+        bail!("UUID {uuid} not found by blkid");
+    }
+    Ok(device)
+}
+
+/// Filesystem type of a block device.
+///
+/// `lsblk` reads udev's database, so it works for unprivileged users and from
+/// systemd user services. `blkid -s TYPE` probes the device node directly and
+/// returns nothing for a non-root user when the node is `root:disk 0660`, which
+/// silently dropped the btrfs compression mount options.
+fn device_fstype(device: &str) -> Option<String> {
+    let out = Command::new("lsblk")
+        .args(["-n", "-o", "FSTYPE", device])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        if let Some(line) = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+        {
+            return Some(line.to_string());
+        }
+    }
+    blkid_value(device, "TYPE")
+}
+
+/// Arguments for `udisksctl` to mount `device`, adding filesystem-specific
+/// options (e.g. btrfs zstd compression) when the type is known.
+fn udisksctl_mount_args(device: &str, fstype: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "mount".to_string(),
+        "--block-device".to_string(),
+        device.to_string(),
+        "--no-user-interaction".to_string(),
+    ];
+    if let Some(opts) = fstype.and_then(extra_mount_options_for_fstype) {
+        args.push("--options".to_string());
+        args.push(opts.to_string());
+    }
+    args
+}
+
 fn blkid_value(device: &str, field: &str) -> Option<String> {
     let out = Command::new("blkid")
         .args(["-o", "value", "-s", field, device])
@@ -212,30 +278,10 @@ fn blkid_value(device: &str, field: &str) -> Option<String> {
 /// [`BTRFS_BACKUP_COMPRESS`] so rsync writes land compressed.
 pub fn mount_by_uuid(uuid: &str) -> Result<String> {
     // Resolve UUID → device path
-    let dev_out = Command::new("blkid")
-        .args(["-U", uuid])
-        .output()
-        .context("running blkid")?;
+    let device = device_for_uuid(uuid)?;
 
-    if !dev_out.status.success() {
-        bail!("blkid could not find a device with UUID {uuid}");
-    }
-    let device = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
-    if device.is_empty() {
-        bail!("UUID {uuid} not found by blkid");
-    }
-
-    let mut args = vec![
-        "mount".to_string(),
-        "--block-device".to_string(),
-        device.clone(),
-        "--no-user-interaction".to_string(),
-    ];
-    if let Some(opts) = blkid_value(&device, "TYPE").as_deref().and_then(extra_mount_options_for_fstype)
-    {
-        args.push("--options".to_string());
-        args.push(opts.to_string());
-    }
+    let fstype = device_fstype(&device);
+    let args = udisksctl_mount_args(&device, fstype.as_deref());
 
     // Mount via udisksctl
     let mount_out = Command::new("udisksctl")
@@ -267,12 +313,79 @@ pub fn mount_by_uuid(uuid: &str) -> Result<String> {
     Ok(mountpoint)
 }
 
-/// Mark `dest` so new files inherit zstd compression on btrfs.
+/// `true` when a mount-option string (as printed by `findmnt -o OPTIONS`)
+/// forces zstd compression.
+fn mount_options_force_zstd(options: &str) -> bool {
+    options
+        .split(',')
+        .any(|o| o.trim().starts_with("compress-force=zstd"))
+}
+
+/// Parse the output of `btrfs property get <path> compression`
+/// (`compression=zstd`) into the algorithm name.
+fn parse_btrfs_compression_property(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("compression="))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn btrfs_get_compression(path: &Path) -> Option<String> {
+    let out = Command::new("btrfs")
+        .args(["property", "get"])
+        .arg(path)
+        .arg("compression")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_btrfs_compression_property(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn btrfs_set_zstd_property(path: &Path) -> std::result::Result<(), String> {
+    let out = Command::new("btrfs")
+        .args(["property", "set"])
+        .arg(path)
+        .args(["compression", "zstd"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+fn mount_options_for(path: &Path) -> Option<String> {
+    let resolved = existing_ancestor(path).ok()?;
+    let out = Command::new("findmnt")
+        .args(["--noheadings", "-o", "OPTIONS", "--target"])
+        .arg(resolved)
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Make new backup data on a btrfs destination compress with zstd.
 ///
-/// Best-effort: mount options do the real work; the directory property and
-/// `chattr +c` cover files written if the volume was mounted without
-/// `compress-force`. Failures are returned as a warning string, not an error,
-/// so a backup still runs.
+/// The mount option ([`BTRFS_BACKUP_COMPRESS`]) is the strongest setting, but
+/// the volume may have been mounted by something else (a desktop automount, an
+/// older version of this tool), so the per-directory `compression` property is
+/// also set on the volume root and the destination. New snapshot directories
+/// inherit it from their parent.
+///
+/// This deliberately does **not** run `chattr +c`: on btrfs that flag sets the
+/// directory's compression property to **zlib**, undoing the zstd property.
+///
+/// Best-effort: the result is a log line, never an error, so a backup still
+/// runs.
 pub fn enable_btrfs_dest_compression(dest: &Path) -> Option<String> {
     let fstype = detect_fstype(&dest.to_string_lossy())?;
     if !fstype.eq_ignore_ascii_case("btrfs") {
@@ -280,41 +393,36 @@ pub fn enable_btrfs_dest_compression(dest: &Path) -> Option<String> {
     }
 
     let mut notes = Vec::new();
-    let dest_s = dest.to_string_lossy();
 
-    // Set the FS-root property first. Setting only the dest dir without a
-    // zstd mount option can silently land on zlib.
-    if let Ok(mp) = filesystem_mountpoint(dest) {
-        let mp_s = mp.to_string_lossy();
-        if mp_s != dest_s {
-            let _ = Command::new("btrfs")
-                .args(["property", "set", mp_s.as_ref(), "compression", "zstd"])
-                .output();
+    match mount_options_for(dest) {
+        Some(opts) if mount_options_force_zstd(&opts) => {
+            notes.push("mounted with compress-force=zstd".to_string());
         }
+        _ => notes.push(
+            "WARNING: volume not mounted with compress-force=zstd \
+             (relying on directory property; heuristic may skip incompressible data)"
+                .to_string(),
+        ),
     }
 
-    let prop = Command::new("btrfs")
-        .args(["property", "set", dest_s.as_ref(), "compression", "zstd"])
-        .output();
-    match prop {
-        Ok(out) if out.status.success() => {
-            notes.push("btrfs property compression=zstd".to_string());
+    // Volume root first (best-effort; may not be owned by the user), then the
+    // destination, which is what new snapshot directories inherit from.
+    if let Ok(mp) = filesystem_mountpoint(dest) {
+        if mp != dest {
+            let _ = btrfs_set_zstd_property(&mp);
         }
-        Ok(out) => notes.push(format!(
-            "btrfs property set failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
+    }
+    match btrfs_set_zstd_property(dest) {
+        Ok(()) => {}
         Err(e) => notes.push(format!("btrfs property set failed: {e}")),
     }
 
-    let chattr = Command::new("chattr").args(["+c", dest_s.as_ref()]).output();
-    match chattr {
-        Ok(out) if out.status.success() => notes.push("chattr +c".to_string()),
-        Ok(out) => notes.push(format!(
-            "chattr +c failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+    match btrfs_get_compression(dest) {
+        Some(algo) if algo == "zstd" => notes.push("dest property compression=zstd".to_string()),
+        Some(algo) => notes.push(format!(
+            "WARNING: dest property compression={algo} (expected zstd)"
         )),
-        Err(e) => notes.push(format!("chattr +c failed: {e}")),
+        None => notes.push("WARNING: could not read dest compression property".to_string()),
     }
 
     Some(format!(
@@ -418,11 +526,6 @@ pub fn detect_label_for_path(path: &str) -> Option<String> {
     } else {
         Some(label)
     }
-}
-
-/// Available free bytes on the filesystem containing `path`.
-pub fn available_bytes(path: &Path) -> Result<u64> {
-    Ok(filesystem_bytes(path)?.0)
 }
 
 /// Available and total bytes on the filesystem containing `path`.
@@ -712,6 +815,62 @@ mod tests {
         );
         assert!(extra_mount_options_for_fstype("ext4").is_none());
         assert!(BTRFS_BACKUP_COMPRESS.contains("compress-force=zstd"));
+    }
+
+    #[test]
+    fn udisksctl_args_add_compression_options_for_btrfs() {
+        let args = udisksctl_mount_args("/dev/sda1", Some("btrfs"));
+        assert_eq!(
+            args,
+            [
+                "mount",
+                "--block-device",
+                "/dev/sda1",
+                "--no-user-interaction",
+                "--options",
+                BTRFS_BACKUP_COMPRESS,
+            ]
+        );
+    }
+
+    #[test]
+    fn udisksctl_args_have_no_options_for_other_or_unknown_fs() {
+        for fs in [Some("ext4"), Some("vfat"), None] {
+            let args = udisksctl_mount_args("/dev/sdb1", fs);
+            assert!(!args.iter().any(|a| a == "--options"), "fs={fs:?}");
+        }
+    }
+
+    #[test]
+    fn device_for_uuid_rejects_path_traversal() {
+        // Must not canonicalize an escaping path; falls through to blkid,
+        // which will not know this UUID.
+        assert!(device_for_uuid("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn mount_options_force_zstd_detection() {
+        assert!(mount_options_force_zstd(
+            "rw,nosuid,nodev,relatime,compress-force=zstd:3,space_cache=v2"
+        ));
+        assert!(mount_options_force_zstd("rw,compress-force=zstd"));
+        assert!(!mount_options_force_zstd("rw,nosuid,nodev,relatime,space_cache=v2"));
+        assert!(!mount_options_force_zstd("rw,compress=zstd:3"));
+        assert!(!mount_options_force_zstd("rw,compress-force=zlib"));
+    }
+
+    #[test]
+    fn parse_btrfs_compression_property_values() {
+        assert_eq!(
+            parse_btrfs_compression_property("compression=zstd\n").as_deref(),
+            Some("zstd")
+        );
+        assert_eq!(
+            parse_btrfs_compression_property("compression=zlib").as_deref(),
+            Some("zlib")
+        );
+        assert_eq!(parse_btrfs_compression_property(""), None);
+        assert_eq!(parse_btrfs_compression_property("compression=\n"), None);
     }
 
     #[test]

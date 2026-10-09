@@ -1531,22 +1531,9 @@ fn build_btrfs_tab(cfg: Rc<RefCell<Config>>) -> GBox {
                 if !dest_parent.exists() {
                     if let Some(uuid) = cfg.borrow().drive_uuid.clone() {
                         send_lbl.set_text("⏳  Drive not mounted — attempting mount…");
-                        if let Ok(dev_out) = std::process::Command::new("blkid")
-                            .args(["-U", &uuid])
-                            .output()
-                        {
-                            let dev = String::from_utf8_lossy(&dev_out.stdout).trim().to_string();
-                            if !dev.is_empty() {
-                                let _ = std::process::Command::new("udisksctl")
-                                    .args([
-                                        "mount",
-                                        "--block-device",
-                                        &dev,
-                                        "--no-user-interaction",
-                                    ])
-                                    .output();
-                            }
-                        }
+                        // Shared with the backup path so the btrfs compression
+                        // mount options are applied consistently.
+                        let _ = crate::drives::mount_by_uuid(&uuid);
                     }
                     if !dest_parent.exists() {
                         send_lbl.set_text(

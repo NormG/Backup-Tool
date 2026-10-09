@@ -17,7 +17,11 @@ hardlinked so they consume no extra disk space.
   backups via `--link-dest`; only deltas use new space
 - **Automatic drive handling** — if the drive is not mounted at backup time the
   app attempts to mount it by UUID via `udisksctl` (no root required). Btrfs
-  volumes are mounted with `compress-force=zstd:3` so rsync writes pack on disk.
+  volumes are mounted with `compress-force=zstd:3` so rsync writes pack on disk
+  (see [Btrfs compression](#btrfs-compression)).
+- **Unattended mounting** — the RPM ships a polkit rule and a `backup-tool`
+  group; members may mount the backup drive from the systemd timer without a
+  prompt (`sudo usermod -aG backup-tool <user>`).
 - **Retention policy** — incrementals from the current cycle are removed when
   the next full backup succeeds; orphaned incrementals older than
   `retention_days` are pruned as a safety net if a full is delayed
@@ -257,7 +261,7 @@ immediately.
 
 ```
 /mnt/home_backups/myhostname/
-├── full-2026-07-21_020015/     ← weekly full copy
+├── full-2026-07-21_020015/     ← weekly full (hardlinked to the previous snapshot, checksum-verified)
 ├── inc-2026-07-22_020008/      ← incremental (files unchanged vs full are hardlinked)
 ├── inc-2026-07-23_020011/
 │   └── ...
@@ -289,10 +293,51 @@ share disk blocks with the full (or previous incremental) they were derived from
   lines (`[timestamp] …`) are archived into that full backup under
   `.backup-tool/backup.log` and the active log is truncated.  Per-file rsync
   detail goes to a temp file that is discarded.
-- **Each full backup is a complete copy** — no hardlinks from previous fulls, so
-  every full uses roughly the same space as your home directory.  Plan drive
-  capacity for `keep_full_snapshots` full copies plus daily incrementals during
-  each cycle.
+- **Full backups are hardlinked and checksum-verified** — when a previous
+  snapshot exists, a full backup runs `rsync --link-dest=<latest> --checksum`:
+  every file is re-read and compared by content (so a silently corrupted copy on
+  the backup drive is replaced), but unchanged data stays hardlinked and only
+  changed data is written.  A full therefore needs about the same free space as
+  an incremental (roughly 2% of the drive, minimum 10 GiB), not a second
+  complete copy.  It does take longer because both sides are read in full.
+  Only the very first full backup (no earlier snapshot) is a plain complete copy.
+
+---
+
+## Btrfs compression
+
+On a Btrfs backup drive, new backup data is compressed with zstd:
+
+- Auto-mounts via `udisksctl` pass `compress-force=zstd:3`.
+- Before each backup the tool also sets the directory property
+  `btrfs property set <dest> compression zstd` (and on the volume root), so data
+  is compressed even if the drive was mounted some other way.
+- The tool never runs `chattr +c`: on Btrfs that flag sets the compression
+  property to **zlib**, overriding zstd.
+- Each backup logs whether the volume is mounted with `compress-force=zstd`
+  and what the destination's compression property is.
+
+Check it:
+
+```bash
+findmnt -no OPTIONS /run/media/$USER/Backup      # expect compress-force=zstd:3
+btrfs property get <dest_dir> compression        # expect compression=zstd
+```
+
+### Recompress existing backups (manual, optional)
+
+Only *new* writes are compressed.  Snapshots written before this was fixed stay
+as they are until rewritten.  To recompress them (needs root, can take many
+hours, and the drive needs some free space while it runs):
+
+```bash
+sudo compsize -x /run/media/$USER/Backup          # current ratio (dnf install compsize)
+sudo btrfs filesystem defragment -r -v -czstd <dest_dir>
+sudo compsize -x /run/media/$USER/Backup          # ratio afterwards
+```
+
+Hardlinks are unaffected (they are one inode); run it while no backup is
+running.
 
 ---
 
