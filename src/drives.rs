@@ -244,10 +244,16 @@ pub fn mount_by_uuid(uuid: &str) -> Result<String> {
         .context("running udisksctl")?;
 
     if !mount_out.status.success() {
-        bail!(
-            "udisksctl mount failed for {device}: {}",
-            String::from_utf8_lossy(&mount_out.stderr).trim()
-        );
+        let stderr = String::from_utf8_lossy(&mount_out.stderr);
+        let stderr = stderr.trim();
+        let hint = if stderr.contains("Not authorized") || stderr.contains("NotAuthorized") {
+            "\nHint: polkit denied the mount. Ensure the user is in the 'backup-tool' \
+             group (sudo usermod -aG backup-tool $USER) and that \
+             /usr/share/polkit-1/rules.d/50-backup-tool.rules is installed."
+        } else {
+            ""
+        };
+        bail!("udisksctl mount failed for {device}: {stderr}{hint}");
     }
 
     // udisksctl prints "Mounted /dev/sdX at /run/media/user/LABEL.\n"

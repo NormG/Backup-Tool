@@ -13,7 +13,7 @@ set -euo pipefail
 
 NAME="backup-tool"
 VERSION="0.1.13"
-RELEASE="1"
+RELEASE="2"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
@@ -84,6 +84,10 @@ ok "Source tarball: ${SOURCES}/${SRC_TAR}"
 # Source1: vendored Rust crates
 tar czf "${SOURCES}/${VENDOR_TAR}" vendor
 ok "Vendor tarball: ${SOURCES}/${VENDOR_TAR}"
+
+# Source2: sysusers.d definition (must be a standalone source for %sysusers_create_package)
+cp "${SCRIPT_DIR}/packaging/${NAME}.sysusers" "${SOURCES}/${NAME}.sysusers"
+ok "Sysusers source: ${SOURCES}/${NAME}.sysusers"
 
 # ── Spec file ─────────────────────────────────────────────────────────────────
 step "Copying spec file…"

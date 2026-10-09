@@ -1,0 +1,18 @@
+// Backup-Tool: let members of the "backup-tool" group mount the backup drive
+// via udisks2 without an interactive polkit prompt.
+//
+// The scheduled backup runs as a systemd *user* service. When no active
+// graphical session is present (screen locked, logged out with linger, early
+// morning timer run) udisks2's default for filesystem-mount is auth_admin,
+// which fails with "Not authorized to perform operation" because there is no
+// polkit agent to answer the prompt.
+//
+// Only mounting is granted -- not unmounting, formatting, or other udisks2
+// actions. Add a user with:  sudo usermod -aG backup-tool <user>
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.udisks2.filesystem-mount" ||
+         action.id == "org.freedesktop.udisks2.filesystem-mount-system") &&
+        subject.isInGroup("backup-tool")) {
+        return polkit.Result.YES;
+    }
+});
