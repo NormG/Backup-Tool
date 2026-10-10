@@ -419,8 +419,9 @@ and how to reproduce the unattended case without rebooting are in
 
 A full backup is hardlinked and needs only about 2% of the drive free (see
 [Backup layout on drive](#backup-layout-on-drive)).  If the log still says
-"Space check failed", the drive really is nearly full: remove old `full-*`
-backups or lower `keep_full_snapshots`.
+"Space check failed", the drive really is nearly full: delete old `full-*`
+backups by hand to free space before retrying.  Lowering `keep_full_snapshots`
+does not help here: it only removes old full backups *after* a new full succeeds.
 
 ---
 
