@@ -584,7 +584,14 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
         .halign(Align::End)
         .margin_top(16)
         .build();
-    let save_lbl = Label::builder().halign(Align::Start).build();
+    // Wrap: a failed-cleanup warning carries a path, an error and the repair
+    // command; without wrapping it would widen the window past the screen.
+    // Selectable so the command can be copied.
+    let save_lbl = Label::builder()
+        .halign(Align::Start)
+        .wrap(true)
+        .selectable(true)
+        .build();
 
     {
         let cfg = Rc::clone(&cfg);

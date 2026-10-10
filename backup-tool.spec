@@ -188,8 +188,11 @@ migrate_backup_tool_user_files() {
             changed=true
         fi
         # The service has no [Install] section any more; only the timer starts it.
+        # Remove ONLY that section: from its header up to (not including) the next
+        # section header, or to the end of the file. Deleting to EOF would also
+        # drop [Service] (ExecStart) if a hand-edited unit puts it after [Install].
         if grep -q '^WantedBy=default.target' "$svc" 2>/dev/null; then
-            sed -i '/^\[Install\]/,$d' "$svc"
+            sed -i '/^\[Install\]/,/^\[[^]]*\]/{/^\[Install\]/d;/^\[/!d}' "$svc"
             changed=true
         fi
     fi
