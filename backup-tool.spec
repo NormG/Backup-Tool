@@ -214,8 +214,10 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 * Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-6
 - Each run now deletes stale .inprogress-* staging directories left on the
   backup drive by an interrupted backup, and rsync-*.log files older than a day
-  in the data directory. Runs under the run lock; only real directories/regular
-  files are removed and symlinks are never followed.
+  in the data directory. A staging directory is kept while any running process
+  (e.g. an rsync orphaned by a killed backup-tool) still refers to it, and
+  nothing is deleted if /proc cannot be inspected. Only real directories and
+  regular files are removed; symlinks are never followed.
 
 * Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-5
 - polkit rule: also grant udisks2 filesystem-mount-other-seat. udisks2 requests

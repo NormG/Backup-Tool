@@ -295,9 +295,11 @@ share disk blocks with the full (or previous incremental) they were derived from
   limit from the Schedule tab.
 - **Orphan incrementals** — if a scheduled full is delayed, incrementals older
   than `retention_days` are removed as a safety net.
-- **Interrupted runs** — at the start of every run (after the run lock is
-  held, so nothing else is using them) stale `.inprogress-*` staging
-  directories on the drive are deleted, as is the backup drive's own trash.
+- **Interrupted runs** — at the start of every run stale `.inprogress-*`
+  staging directories on the drive are deleted, as is the backup drive's own
+  trash.  A staging directory is skipped (and the skip is logged) while any
+  running process still refers to it, for example an `rsync` that outlived a
+  killed `backup-tool`; if `/proc` cannot be inspected nothing is deleted.
   Only real directories directly under the destination are removed; symlinks
   and plain files with that prefix are never touched or followed.
 - **Weekly log rotation** — on each successful full backup, operational log
@@ -390,6 +392,8 @@ systemctl --user enable  --now backup-tool.timer
 > You do not need to remove it: the next run deletes any stale `.inprogress-*`
 > directories (and `rsync-*.log` files older than a day in
 > `~/.local/share/backup-tool/`) before it starts, and logs what it removed.
+> If the rsync you interrupted is somehow still running, its directory is kept
+> until that process exits.
 
 ---
 

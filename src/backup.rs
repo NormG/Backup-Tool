@@ -472,13 +472,56 @@ fn hardlinked_full_bytes_needed(volume_total: u64) -> u64 {
 /// deletes its own log); the age gate keeps this run's log out of reach.
 const STALE_RSYNC_LOG_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// True if a command-line argument refers to the staging directory called
+/// `name`: the argument is that directory, or a path inside it (rsync is given
+/// the staging directory as its destination).
+fn arg_refers_to_dir(arg: &str, name: &str) -> bool {
+    arg.match_indices(name).any(|(i, _)| {
+        let end = i + name.len();
+        let before_ok = i == 0 || arg.as_bytes()[i - 1] == b'/';
+        let after_ok = end == arg.len() || arg.as_bytes()[end] == b'/';
+        before_ok && after_ok
+    })
+}
+
+/// PIDs of running processes whose command line refers to the staging
+/// directory `name`. Fails if `/proc` cannot be listed.
+fn processes_using_dir(name: &str) -> std::io::Result<Vec<u32>> {
+    let mut pids = Vec::new();
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        // The process may exit while we scan, or be unreadable: skip it.
+        let Ok(raw) = fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let uses_dir = raw
+            .split(|b| *b == 0)
+            .any(|arg| std::str::from_utf8(arg).is_ok_and(|a| arg_refers_to_dir(a, name)));
+        if uses_dir {
+            pids.push(pid);
+        }
+    }
+    Ok(pids)
+}
+
 /// Remove `.inprogress-*` staging directories left in `dest_root` by an
 /// interrupted backup (power loss, `systemctl stop`, kill).
 ///
 /// A staging directory is renamed on success and removed when rsync fails, so
-/// any that exist while this run holds the run lock were abandoned. Only real
-/// directories that are direct children of `dest_root` are touched; symlinks and
-/// files with that prefix are left alone. Failures are logged, never fatal.
+/// one that is still there was normally abandoned. The run lock is NOT proof of
+/// that: if `backup-tool` is killed while its rsync child keeps running, the
+/// lock is released but rsync is still writing into the directory. So a
+/// directory is skipped while any running process still refers to it, and if
+/// `/proc` cannot be inspected nothing is deleted. Only real directories that
+/// are direct children of `dest_root` are touched; symlinks and files with that
+/// prefix are left alone. Failures are logged, never fatal.
 /// Returns how many directories were removed.
 fn purge_stale_inprogress(dest_root: &Path, log: &mut fs::File) -> usize {
     let Ok(entries) = dest_root.read_dir() else {
@@ -498,6 +541,29 @@ fn purge_stale_inprogress(dest_root: &Path, log: &mut fs::File) -> usize {
         };
         if !meta.is_dir() {
             continue;
+        }
+        match processes_using_dir(&n) {
+            Ok(pids) if !pids.is_empty() => {
+                log_line(
+                    log,
+                    &format!(
+                        "Keeping staging directory {n}: still in use by process(es) {pids:?} \
+                         (an interrupted backup whose rsync is still running?)"
+                    ),
+                );
+                continue;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log_line(
+                    log,
+                    &format!(
+                        "WARNING: cannot check /proc for running processes ({e}); \
+                         not removing stale staging directories this run"
+                    ),
+                );
+                return removed;
+            }
         }
         make_tree_deletable(&path);
         match fs::remove_dir_all(&path) {
@@ -1459,6 +1525,55 @@ mod tests {
 
         fs::remove_dir_all(&dir).unwrap();
         fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn arg_refers_to_dir_matches_the_directory_or_paths_inside_it() {
+        let name = ".inprogress-inc-2026-10-10_080250";
+        assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}"), name));
+        assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}/"), name));
+        assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}/sub/f"), name));
+        assert!(arg_refers_to_dir(name, name));
+        // A different directory, or only a name prefix/suffix, must not match.
+        assert!(!arg_refers_to_dir("/mnt/b/verona1/.inprogress-inc-2026-10-10_080251", name));
+        assert!(!arg_refers_to_dir(&format!("/mnt/b/verona1/x{name}"), name));
+        assert!(!arg_refers_to_dir(&format!("/mnt/b/verona1/{name}-old"), name));
+        assert!(!arg_refers_to_dir("--archive", name));
+    }
+
+    #[test]
+    fn purge_stale_inprogress_keeps_a_directory_a_live_process_is_using() {
+        // Stand-in for an orphaned rsync: a live process whose command line
+        // carries the staging directory, as rsync's destination argument does.
+        let dir = tmp_dir("purge-inprogress-live");
+        let staging = dir.join(".inprogress-inc-2024-01-01_120000");
+        let abandoned = dir.join(".inprogress-full-2024-01-02_120000");
+        fs::create_dir_all(staging.join("data")).unwrap();
+        fs::create_dir_all(&abandoned).unwrap();
+
+        // The trailing `; :` stops sh from exec'ing `sleep` directly, which
+        // would drop the staging-directory argument from the command line.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30; :", "sh"])
+            .arg(&staging)
+            .spawn()
+            .unwrap();
+
+        let mut log = open_test_log(&dir);
+        let removed = purge_stale_inprogress(&dir, &mut log);
+        let text = fs::read_to_string(dir.join("test.log")).unwrap();
+
+        assert_eq!(removed, 1, "only the unused directory is purged");
+        assert!(staging.exists(), "directory in use by a live process must be kept");
+        assert!(!abandoned.exists());
+        assert!(text.contains("Keeping staging directory .inprogress-inc-2024-01-01_120000"));
+
+        // Once that process is gone the directory is stale and is purged.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(purge_stale_inprogress(&dir, &mut log), 1);
+        assert!(!staging.exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
