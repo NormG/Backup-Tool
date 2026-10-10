@@ -1,6 +1,10 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// All the information we care about for a single block-device partition.
 #[derive(Debug, Clone)]
@@ -855,7 +859,9 @@ mod tests {
             "rw,nosuid,nodev,relatime,compress-force=zstd:3,space_cache=v2"
         ));
         assert!(mount_options_force_zstd("rw,compress-force=zstd"));
-        assert!(!mount_options_force_zstd("rw,nosuid,nodev,relatime,space_cache=v2"));
+        assert!(!mount_options_force_zstd(
+            "rw,nosuid,nodev,relatime,space_cache=v2"
+        ));
         assert!(!mount_options_force_zstd("rw,compress=zstd:3"));
         assert!(!mount_options_force_zstd("rw,compress-force=zlib"));
     }

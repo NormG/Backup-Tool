@@ -610,7 +610,10 @@ fn purge_stale_rsync_logs(data_dir: &Path, min_age: Duration, log: &mut fs::File
         };
         let old_enough = now.duration_since(modified).is_ok_and(|age| age >= min_age);
         if old_enough && fs::remove_file(&path).is_ok() {
-            log_line(log, &format!("Removed stale rsync log {n} (left by an interrupted backup)"));
+            log_line(
+                log,
+                &format!("Removed stale rsync log {n} (left by an interrupted backup)"),
+            );
             removed += 1;
         }
     }
@@ -759,12 +762,12 @@ fn format_bytes(n: u64) -> String {
 /// needed.  Returns the resolved `PathBuf`.
 fn resolve_dest(config: &Config) -> Result<PathBuf> {
     let dest = Path::new(&config.dest_dir);
-    
+
     // Check if destination already exists
     if dest.exists() {
         return Ok(dest.to_path_buf());
     }
-    
+
     // If not, check if the drive is already mounted by UUID
     if let Some(uuid) = &config.drive_uuid {
         // Check if drive is already mounted
@@ -779,7 +782,7 @@ fn resolve_dest(config: &Config) -> Result<PathBuf> {
                 .with_context(|| format!("creating dest dir {}", dest.display()))?;
             return Ok(dest.to_path_buf());
         }
-        
+
         // Drive is not mounted, so mount it
         let _mp =
             drives::mount_by_uuid(uuid).with_context(|| format!("auto-mounting UUID {uuid}"))?;
@@ -1115,6 +1118,30 @@ fn notify_deviation(title: &str, body: &str) -> Result<()> {
     cmd.arg(title).arg(body);
     cmd.status()?;
     Ok(())
+}
+
+fn build_summary(prefix: &str, final_dir: &Path, rsync_stdout: &str) -> String {
+    let name = final_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+
+    // Extract a few key lines from rsync --stats output.
+    let stats: String = rsync_stdout
+        .lines()
+        .filter(|l| {
+            l.contains("Number of files")
+                || l.contains("Number of created files")
+                || l.contains("Number of deleted files")
+                || l.contains("Total file size")
+                || l.contains("Total transferred")
+                || l.contains("Literal data")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("✅  {prefix} backup complete\nBackup: {name}\n\n{stats}")
 }
 
 #[cfg(test)]
@@ -1511,7 +1538,10 @@ mod tests {
         assert!(dir.join("full-2024-01-01_120000").exists());
         assert!(dir.join("inc-2024-01-02_120000").exists());
         assert!(dir.join("not-inprogress").exists());
-        assert!(dir.join(".inprogress-file").exists(), "files are not purged");
+        assert!(
+            dir.join(".inprogress-file").exists(),
+            "files are not purged"
+        );
         assert!(
             fs::symlink_metadata(dir.join(".inprogress-link")).is_ok(),
             "symlink itself is left alone"
@@ -1532,12 +1562,21 @@ mod tests {
         let name = ".inprogress-inc-2026-10-10_080250";
         assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}"), name));
         assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}/"), name));
-        assert!(arg_refers_to_dir(&format!("/mnt/b/verona1/{name}/sub/f"), name));
+        assert!(arg_refers_to_dir(
+            &format!("/mnt/b/verona1/{name}/sub/f"),
+            name
+        ));
         assert!(arg_refers_to_dir(name, name));
         // A different directory, or only a name prefix/suffix, must not match.
-        assert!(!arg_refers_to_dir("/mnt/b/verona1/.inprogress-inc-2026-10-10_080251", name));
+        assert!(!arg_refers_to_dir(
+            "/mnt/b/verona1/.inprogress-inc-2026-10-10_080251",
+            name
+        ));
         assert!(!arg_refers_to_dir(&format!("/mnt/b/verona1/x{name}"), name));
-        assert!(!arg_refers_to_dir(&format!("/mnt/b/verona1/{name}-old"), name));
+        assert!(!arg_refers_to_dir(
+            &format!("/mnt/b/verona1/{name}-old"),
+            name
+        ));
         assert!(!arg_refers_to_dir("--archive", name));
     }
 
@@ -1564,7 +1603,10 @@ mod tests {
         let text = fs::read_to_string(dir.join("test.log")).unwrap();
 
         assert_eq!(removed, 1, "only the unused directory is purged");
-        assert!(staging.exists(), "directory in use by a live process must be kept");
+        assert!(
+            staging.exists(),
+            "directory in use by a live process must be kept"
+        );
         assert!(!abandoned.exists());
         assert!(text.contains("Keeping staging directory .inprogress-inc-2024-01-01_120000"));
 
@@ -1580,7 +1622,10 @@ mod tests {
     fn purge_stale_inprogress_missing_dir_is_a_no_op() {
         let dir = tmp_dir("purge-inprogress-missing");
         let mut log = open_test_log(&dir);
-        assert_eq!(purge_stale_inprogress(&dir.join("does-not-exist"), &mut log), 0);
+        assert_eq!(
+            purge_stale_inprogress(&dir.join("does-not-exist"), &mut log),
+            0
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1841,28 +1886,4 @@ mod tests {
             .is_none());
         fs::remove_dir_all(&snapshot).unwrap();
     }
-}
-
-fn build_summary(prefix: &str, final_dir: &Path, rsync_stdout: &str) -> String {
-    let name = final_dir
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-
-    // Extract a few key lines from rsync --stats output.
-    let stats: String = rsync_stdout
-        .lines()
-        .filter(|l| {
-            l.contains("Number of files")
-                || l.contains("Number of created files")
-                || l.contains("Number of deleted files")
-                || l.contains("Total file size")
-                || l.contains("Total transferred")
-                || l.contains("Literal data")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("✅  {prefix} backup complete\nBackup: {name}\n\n{stats}")
 }
