@@ -6,7 +6,7 @@ use std::{
     os::unix::fs::{self as unix_fs, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use crate::{config::Config, drives, pending_full, run_lock};
@@ -90,6 +90,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         }
     }
     reclaim_backup_drive_trash(&dest_root)?;
+    // Leftovers from interrupted runs. We hold the run lock, so none of these
+    // can belong to a backup that is still running.
+    if let Ok(mut log) = open_log_append(&Config::log_path()) {
+        purge_stale_inprogress(&dest_root, &mut log);
+        purge_stale_rsync_logs(&Config::data_dir(), STALE_RSYNC_LOG_AGE, &mut log);
+    }
 
     // ── 2. Determine full vs incremental ──────────────────────────────────
     let pending_since = if matches!(kind, BackupKind::Auto) {
@@ -460,6 +466,89 @@ fn hardlinked_full_bytes_needed(volume_total: u64) -> u64 {
     let floor = HARDLINK_FULL_MIN_BYTES
         .min((volume_total as f64 * HARDLINK_FULL_MIN_FRACTION).ceil() as u64);
     headroom.max(floor)
+}
+
+/// Rsync logs older than this are leftovers (a successful or failed run
+/// deletes its own log); the age gate keeps this run's log out of reach.
+const STALE_RSYNC_LOG_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Remove `.inprogress-*` staging directories left in `dest_root` by an
+/// interrupted backup (power loss, `systemctl stop`, kill).
+///
+/// A staging directory is renamed on success and removed when rsync fails, so
+/// any that exist while this run holds the run lock were abandoned. Only real
+/// directories that are direct children of `dest_root` are touched; symlinks and
+/// files with that prefix are left alone. Failures are logged, never fatal.
+/// Returns how many directories were removed.
+fn purge_stale_inprogress(dest_root: &Path, log: &mut fs::File) -> usize {
+    let Ok(entries) = dest_root.read_dir() else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if !n.starts_with(".inprogress-") {
+            continue;
+        }
+        let path = entry.path();
+        // symlink_metadata: a symlink is not a directory here, so it is skipped.
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        make_tree_deletable(&path);
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {
+                log_line(
+                    log,
+                    &format!("Removed stale staging directory {n} (left by an interrupted backup)"),
+                );
+                removed += 1;
+            }
+            Err(e) => log_line(
+                log,
+                &format!("WARNING: could not remove stale staging directory {n}: {e}"),
+            ),
+        }
+    }
+    removed
+}
+
+/// Remove `rsync-*.log` files in `data_dir` that are at least `min_age` old.
+/// Only regular files named `rsync-*.log` are touched. Failures are ignored.
+/// Returns how many files were removed.
+fn purge_stale_rsync_logs(data_dir: &Path, min_age: Duration, log: &mut fs::File) -> usize {
+    let Ok(entries) = data_dir.read_dir() else {
+        return 0;
+    };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if !(n.starts_with("rsync-") && n.ends_with(".log")) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let old_enough = now.duration_since(modified).is_ok_and(|age| age >= min_age);
+        if old_enough && fs::remove_file(&path).is_ok() {
+            log_line(log, &format!("Removed stale rsync log {n} (left by an interrupted backup)"));
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Empty trash on the backup volume; log and continue on failure.
@@ -1311,6 +1400,106 @@ mod tests {
             full_backup_bytes_needed(&dir, total),
             hardlinked_full_bytes_needed(total)
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── purge_stale_inprogress / purge_stale_rsync_logs ──────────────────────────────
+
+    fn open_test_log(dir: &Path) -> fs::File {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("test.log"))
+            .unwrap()
+    }
+
+    #[test]
+    fn purge_stale_inprogress_removes_only_staging_dirs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmp_dir("purge-inprogress");
+        let outside = tmp_dir("purge-inprogress-outside");
+        fs::write(outside.join("keep-me.txt"), "x").unwrap();
+
+        // Stale staging dirs, one with a read-only nested dir like a Go module cache.
+        make_snapshot_dir(&dir, ".inprogress-full-2024-01-01_120000");
+        let nested = dir.join(".inprogress-inc-2024-01-02_120000/go/pkg/mod");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("go.mod"), "module x\n").unwrap();
+        let mut perms = fs::metadata(&nested).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(&nested, perms).unwrap();
+
+        // Things that must survive.
+        make_snapshot_dir(&dir, "full-2024-01-01_120000");
+        make_snapshot_dir(&dir, "inc-2024-01-02_120000");
+        make_snapshot_dir(&dir, "not-inprogress");
+        fs::write(dir.join(".inprogress-file"), "a file, not a directory").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(".inprogress-link")).unwrap();
+
+        let mut log = open_test_log(&dir);
+        assert_eq!(purge_stale_inprogress(&dir, &mut log), 2);
+
+        assert!(!dir.join(".inprogress-full-2024-01-01_120000").exists());
+        assert!(!dir.join(".inprogress-inc-2024-01-02_120000").exists());
+        assert!(dir.join("full-2024-01-01_120000").exists());
+        assert!(dir.join("inc-2024-01-02_120000").exists());
+        assert!(dir.join("not-inprogress").exists());
+        assert!(dir.join(".inprogress-file").exists(), "files are not purged");
+        assert!(
+            fs::symlink_metadata(dir.join(".inprogress-link")).is_ok(),
+            "symlink itself is left alone"
+        );
+        assert!(
+            outside.join("keep-me.txt").exists(),
+            "a symlink must never be followed"
+        );
+        let text = fs::read_to_string(dir.join("test.log")).unwrap();
+        assert!(text.contains("Removed stale staging directory .inprogress-full-2024-01-01_120000"));
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn purge_stale_inprogress_missing_dir_is_a_no_op() {
+        let dir = tmp_dir("purge-inprogress-missing");
+        let mut log = open_test_log(&dir);
+        assert_eq!(purge_stale_inprogress(&dir.join("does-not-exist"), &mut log), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn purge_stale_rsync_logs_removes_only_old_rsync_logs() {
+        let dir = tmp_dir("purge-rsync-logs");
+        let old = dir.join("rsync-2020-01-01_120000.log");
+        let fresh = dir.join("rsync-current.log");
+        fs::write(&old, "old").unwrap();
+        fs::write(&fresh, "fresh").unwrap();
+        std::process::Command::new("touch")
+            .args(["-t", "202001010000", old.to_str().unwrap()])
+            .status()
+            .unwrap();
+        // Same age as `old` but not an rsync log: must survive.
+        let unrelated = dir.join("backup.log");
+        let wrong_ext = dir.join("rsync-notes.txt");
+        for p in [&unrelated, &wrong_ext] {
+            fs::write(p, "keep").unwrap();
+            std::process::Command::new("touch")
+                .args(["-t", "202001010000", p.to_str().unwrap()])
+                .status()
+                .unwrap();
+        }
+
+        let mut log = open_test_log(&dir);
+        assert_eq!(
+            purge_stale_rsync_logs(&dir, Duration::from_secs(24 * 3600), &mut log),
+            1
+        );
+        assert!(!old.exists(), "old rsync log should be purged");
+        assert!(fresh.exists(), "a fresh rsync log must be kept");
+        assert!(unrelated.exists());
+        assert!(wrong_ext.exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
