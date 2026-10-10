@@ -439,7 +439,10 @@ systemctl --user disable backup-tool.service                     # remove the ho
 
 The timer (`backup-tool.timer`) stays enabled and still catches up on a missed
 run after a boot or a resume from suspend (`Persistent=true`).  Reinstalling
-the RPM, or saving the schedule in the app, also removes the stale link.
+the RPM, or saving the schedule in the app, also removes the stale link; if it
+cannot be removed (for example the directory is read-only) the app shows a
+warning with the same `systemctl --user disable` command instead of staying
+silent.
 
 ### The scheduled full backup keeps being deferred
 

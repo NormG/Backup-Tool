@@ -622,7 +622,13 @@ fn build_schedule(cfg: Rc<RefCell<Config>>) -> GBox {
                 }
             }
             match systemd::update_timer(&cfg.borrow()) {
-                Ok(()) => save_lbl.set_text("✅  Schedule saved and timer reloaded."),
+                Ok(warnings) if warnings.is_empty() => {
+                    save_lbl.set_text("✅  Schedule saved and timer reloaded.")
+                }
+                Ok(warnings) => save_lbl.set_text(&format!(
+                    "✅  Schedule saved and timer reloaded.\n⚠  {}",
+                    warnings.join("\n⚠  ")
+                )),
                 Err(e) => {
                     save_lbl.set_text(&format!("⚠  Saved config but timer reload failed: {e}"))
                 }

@@ -57,10 +57,14 @@ pub fn install(config: &Config) -> Result<String> {
     write_timer_unit(&sd_dir, h, m)?;
     log.push(format!("  Wrote {}", sd_dir.join(TIMER).display()));
 
-    for name in remove_boot_hook(&sd_dir) {
+    let cleanup = remove_boot_hook(&sd_dir);
+    for name in &cleanup.removed {
         log.push(format!(
             "  Removed stale default.target link for {name} (only the timer starts backups)"
         ));
+    }
+    if let Some(warning) = boot_hook_warning(&cleanup) {
+        log.push(format!("  ⚠  {warning}"));
     }
 
     // ── Reload & enable ───────────────────────────────────────────────────
@@ -83,7 +87,11 @@ pub fn install(config: &Config) -> Result<String> {
 }
 
 /// Regenerate and reload the timer unit after a schedule change.
-pub fn update_timer(config: &Config) -> Result<()> {
+///
+/// The timer is always reloaded and enabled. On success returns any warnings
+/// the caller should show next to the success message (currently: a stale
+/// boot link that could not be removed). An empty list means a clean save.
+pub fn update_timer(config: &Config) -> Result<Vec<String>> {
     let bin = current_exe()?;
     let (h, m) = config.backup_hm();
     let sd_dir = systemd_user_dir();
@@ -91,10 +99,12 @@ pub fn update_timer(config: &Config) -> Result<()> {
 
     write_service_unit(&sd_dir, &bin)?;
     write_timer_unit(&sd_dir, h, m)?;
-    remove_boot_hook(&sd_dir);
+    let warnings: Vec<String> = boot_hook_warning(&remove_boot_hook(&sd_dir))
+        .into_iter()
+        .collect();
     run_systemctl(&["daemon-reload"])?;
     run_systemctl(&["enable", "--now", TIMER])?;
-    Ok(())
+    Ok(warnings)
 }
 
 /// Disable and stop the timer.
@@ -145,15 +155,27 @@ pub fn timer_status_line() -> String {
 /// `[Install] WantedBy=default.target` this tool used to write) ran a backup
 /// about 20 seconds after boot, before any session exists, and duplicated the
 /// timer's own `Persistent=true` catch-up. Also removes a *dangling* link to
-/// the pre-rename `home-backup.service`. Only symlinks are removed; returns the
-/// unit names whose link was removed.
-fn remove_boot_hook(sd_dir: &Path) -> Vec<String> {
+/// the pre-rename `home-backup.service`. Only symlinks are removed.
+///
+/// A link that is not there is a normal no-op. A link that is there but cannot
+/// be removed (e.g. the directory is not writable) is recorded in `failed`
+/// rather than ignored, because the boot-time backup would silently stay
+/// enabled; see [`boot_hook_warning`].
+fn remove_boot_hook(sd_dir: &Path) -> BootHookCleanup {
+    use std::io::ErrorKind::NotFound;
+
     let wants = sd_dir.join("default.target.wants");
-    let mut removed = Vec::new();
+    let mut out = BootHookCleanup::default();
     for (name, only_if_dangling) in [(SERVICE, false), (LEGACY_SERVICE, true)] {
         let link = wants.join(name);
-        let Ok(meta) = std::fs::symlink_metadata(&link) else {
-            continue;
+        let meta = match std::fs::symlink_metadata(&link) {
+            Ok(m) => m,
+            Err(e) if e.kind() == NotFound => continue,
+            Err(e) => {
+                out.failed
+                    .push(format!("{name}: cannot inspect {}: {e}", link.display()));
+                continue;
+            }
         };
         if !meta.file_type().is_symlink() {
             continue;
@@ -162,11 +184,36 @@ fn remove_boot_hook(sd_dir: &Path) -> Vec<String> {
         if only_if_dangling && link.exists() {
             continue;
         }
-        if std::fs::remove_file(&link).is_ok() {
-            removed.push(name.to_string());
+        match std::fs::remove_file(&link) {
+            Ok(()) => out.removed.push(name.to_string()),
+            Err(e) if e.kind() == NotFound => {} // removed by someone else meanwhile
+            Err(e) => out
+                .failed
+                .push(format!("{name}: cannot remove {}: {e}", link.display())),
         }
     }
-    removed
+    out
+}
+
+/// What [`remove_boot_hook`] did.
+#[derive(Debug, Default)]
+struct BootHookCleanup {
+    /// Unit names whose `default.target.wants` link was removed.
+    removed: Vec<String>,
+    /// One message per link that exists but could not be removed or inspected.
+    failed: Vec<String>,
+}
+
+/// User-facing warning for a failed cleanup, or `None` when nothing failed.
+fn boot_hook_warning(cleanup: &BootHookCleanup) -> Option<String> {
+    if cleanup.failed.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Could not remove the stale boot link ({}). A backup may still start at \
+         every boot; fix it with: systemctl --user disable {SERVICE}",
+        cleanup.failed.join("; ")
+    ))
 }
 
 /// The service has deliberately no `[Install]` section: only the timer starts it.
@@ -418,9 +465,10 @@ mod tests {
         symlink(dir.join(LEGACY_SERVICE), wants.join(LEGACY_SERVICE)).unwrap(); // target missing
         symlink(dir.join("other.service"), wants.join("other.service")).unwrap();
 
-        let mut removed = remove_boot_hook(&dir);
-        removed.sort();
-        assert_eq!(removed, [SERVICE, LEGACY_SERVICE]); // sorted by name
+        let mut cleanup = remove_boot_hook(&dir);
+        cleanup.removed.sort();
+        assert_eq!(cleanup.removed, [SERVICE, LEGACY_SERVICE]); // sorted by name
+        assert!(cleanup.failed.is_empty(), "{:?}", cleanup.failed);
         assert!(fs::symlink_metadata(wants.join(SERVICE)).is_err());
         assert!(fs::symlink_metadata(wants.join(LEGACY_SERVICE)).is_err());
         assert!(
@@ -429,9 +477,14 @@ mod tests {
         );
         assert!(dir.join(SERVICE).exists(), "the unit file itself is kept");
 
-        // Idempotent.
-        assert!(remove_boot_hook(&dir).is_empty());
+        // Idempotent: links already gone are a quiet no-op, not a failure.
+        assert!(nothing_to_do(&remove_boot_hook(&dir)));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Nothing removed and nothing failed.
+    fn nothing_to_do(c: &BootHookCleanup) -> bool {
+        c.removed.is_empty() && c.failed.is_empty()
     }
 
     #[test]
@@ -444,7 +497,7 @@ mod tests {
         fs::write(dir.join(LEGACY_SERVICE), "unit").unwrap();
         symlink(dir.join(LEGACY_SERVICE), wants.join(LEGACY_SERVICE)).unwrap();
 
-        assert!(remove_boot_hook(&dir).is_empty());
+        assert!(nothing_to_do(&remove_boot_hook(&dir)));
         assert!(fs::symlink_metadata(wants.join(LEGACY_SERVICE)).is_ok());
         let _ = fs::remove_dir_all(dir);
     }
@@ -452,16 +505,70 @@ mod tests {
     #[test]
     fn remove_boot_hook_ignores_a_regular_file_and_a_missing_directory() {
         let dir = unique_dir("boot-hook-edge");
-        assert!(remove_boot_hook(&dir).is_empty(), "no wants dir at all");
+        assert!(
+            nothing_to_do(&remove_boot_hook(&dir)),
+            "no wants dir at all is a normal no-op, not an error"
+        );
 
         let wants = dir.join("default.target.wants");
         fs::create_dir_all(&wants).unwrap();
         fs::write(wants.join(SERVICE), "not a symlink").unwrap();
-        assert!(remove_boot_hook(&dir).is_empty());
+        assert!(nothing_to_do(&remove_boot_hook(&dir)));
         assert!(
             wants.join(SERVICE).exists(),
             "regular files are never deleted"
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_boot_hook_reports_a_link_it_cannot_remove() {
+        use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+        let dir = unique_dir("boot-hook-readonly");
+        if fs::metadata(&dir).unwrap().uid() == 0 {
+            // root ignores directory permissions, so the failure can't be provoked.
+            let _ = fs::remove_dir_all(dir);
+            return;
+        }
+        let wants = dir.join("default.target.wants");
+        fs::create_dir_all(&wants).unwrap();
+        fs::write(dir.join(SERVICE), "unit").unwrap();
+        symlink(dir.join(SERVICE), wants.join(SERVICE)).unwrap();
+        // A read-only directory: the link exists but cannot be unlinked.
+        fs::set_permissions(&wants, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let cleanup = remove_boot_hook(&dir);
+
+        assert!(cleanup.removed.is_empty(), "{:?}", cleanup.removed);
+        assert_eq!(cleanup.failed.len(), 1, "{:?}", cleanup.failed);
+        assert!(
+            cleanup.failed[0].starts_with(SERVICE),
+            "{:?}",
+            cleanup.failed
+        );
+        assert!(
+            fs::symlink_metadata(wants.join(SERVICE)).is_ok(),
+            "the link must still be there"
+        );
+        let warning = boot_hook_warning(&cleanup).expect("a failure must produce a warning");
+        assert!(warning.contains(SERVICE), "{warning}");
+        assert!(
+            warning.contains("systemctl --user disable backup-tool.service"),
+            "the warning must say how to fix it: {warning}"
+        );
+
+        fs::set_permissions(&wants, fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn boot_hook_warning_is_none_when_nothing_failed() {
+        let ok = BootHookCleanup {
+            removed: vec![SERVICE.to_string()],
+            failed: Vec::new(),
+        };
+        assert!(boot_hook_warning(&ok).is_none());
+        assert!(boot_hook_warning(&BootHookCleanup::default()).is_none());
     }
 }
