@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -211,6 +211,13 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-5
+- polkit rule: also grant udisks2 filesystem-mount-other-seat. udisks2 requests
+  it when the caller has no session on the device's seat (timer firing at boot
+  or with nobody logged in), which is the unattended case the rule exists for;
+  without it the mount failed with "Not authorized". filesystem-mount-system
+  stays excluded.
+
 * Fri Oct 09 2026 norm <norm@localhost> - 0.1.13-4
 - polkit rule: grant only udisks2 filesystem-mount; drop filesystem-mount-system
   so group members cannot mount internal/system devices without admin auth

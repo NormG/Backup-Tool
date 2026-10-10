@@ -7,13 +7,21 @@
 // which fails with "Not authorized to perform operation" because there is no
 // polkit agent to answer the prompt.
 //
+// Which udisks2 action is requested depends on the caller:
+//  - filesystem-mount: the caller has a session on the device's seat (e.g. you
+//    are logged in at the console).
+//  - filesystem-mount-other-seat: the caller has NO session on the device's seat.
+//    This is exactly the unattended case -- the timer firing at boot, after a
+//    resume, or while nobody is logged in -- so it must be granted too, or the
+//    backup fails with "Not authorized" whenever the drive is not already
+//    mounted and nobody is at the console.
+//  - filesystem-mount-system: devices udisks2 classifies as system devices
+//    (HintSystem=true: internal disks, anything in fstab).
+//
 // Scope is deliberately narrow:
-//  - Only org.freedesktop.udisks2.filesystem-mount is granted. udisks2 asks for
-//    filesystem-mount-system instead for devices it classifies as system
-//    devices (HintSystem=true: internal disks, anything in fstab), so those are
-//    NOT covered and still need administrator authentication. This rule only
-//    extends to unattended runs what an active local session already gets for
-//    external/removable drives.
+//  - Only filesystem-mount and filesystem-mount-other-seat are granted.
+//    filesystem-mount-system is NOT, so internal/system devices still need
+//    administrator authentication.
 //  - Unmount, eject, format and every other udisks2 action are not granted.
 //
 // If your backup drive is an internal disk that udisks2 treats as a system
@@ -22,7 +30,8 @@
 //
 // Add a user with:  sudo usermod -aG backup-tool <user>
 polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.udisks2.filesystem-mount" &&
+    if ((action.id == "org.freedesktop.udisks2.filesystem-mount" ||
+         action.id == "org.freedesktop.udisks2.filesystem-mount-other-seat") &&
         subject.isInGroup("backup-tool")) {
         return polkit.Result.YES;
     }

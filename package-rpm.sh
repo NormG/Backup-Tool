@@ -13,7 +13,7 @@ set -euo pipefail
 
 NAME="backup-tool"
 VERSION="0.1.13"
-RELEASE="4"
+RELEASE="5"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────

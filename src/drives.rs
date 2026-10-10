@@ -295,7 +295,8 @@ pub fn mount_by_uuid(uuid: &str) -> Result<String> {
         let hint = if stderr.contains("Not authorized") || stderr.contains("NotAuthorized") {
             "\nHint: polkit denied the mount. Ensure the user is in the 'backup-tool' \
              group (sudo usermod -aG backup-tool $USER) and that \
-             /usr/share/polkit-1/rules.d/50-backup-tool.rules is installed."
+             /usr/share/polkit-1/rules.d/50-backup-tool.rules is installed \
+             and grants filesystem-mount-other-seat."
         } else {
             ""
         };
