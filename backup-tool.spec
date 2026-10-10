@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -211,6 +211,12 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-6
+- Each run now deletes stale .inprogress-* staging directories left on the
+  backup drive by an interrupted backup, and rsync-*.log files older than a day
+  in the data directory. Runs under the run lock; only real directories/regular
+  files are removed and symlinks are never followed.
+
 * Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-5
 - polkit rule: also grant udisks2 filesystem-mount-other-seat. udisks2 requests
   it when the caller has no session on the device's seat (timer firing at boot
