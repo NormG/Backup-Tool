@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -160,6 +160,20 @@ migrate_backup_tool_user_files() {
     local svc="$home/.config/systemd/user/backup-tool.service"
     local bookmarks="$home/.config/gtk-3.0/bookmarks"
     local changed=false
+    local wants="$home/.config/systemd/user/default.target.wants"
+
+    # Only the timer should start backups. A stray `systemctl --user enable
+    # backup-tool.service` (or the old [Install] WantedBy=default.target) ran a
+    # backup ~20 s after every boot, before any session existed.
+    if [ -L "$wants/backup-tool.service" ]; then
+        rm -f "$wants/backup-tool.service"
+        changed=true
+    fi
+    # Dangling link to the pre-rename home-backup.service.
+    if [ -L "$wants/home-backup.service" ] && [ ! -e "$wants/home-backup.service" ]; then
+        rm -f "$wants/home-backup.service"
+        changed=true
+    fi
 
     if [ -f "$svc" ]; then
         if grep -q '--backup' "$svc" 2>/dev/null; then
@@ -171,6 +185,11 @@ migrate_backup_tool_user_files() {
         fi
         if grep -q 'Description=Home Directory Backup' "$svc" 2>/dev/null; then
             sed -i 's|^Description=Home Directory Backup|Description=Backup-Tool automatic backup|' "$svc"
+            changed=true
+        fi
+        # The service has no [Install] section any more; only the timer starts it.
+        if grep -q '^WantedBy=default.target' "$svc" 2>/dev/null; then
+            sed -i '/^\[Install\]/,$d' "$svc"
             changed=true
         fi
     fi
@@ -211,6 +230,15 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-7
+- Only the timer starts backups. The generated backup-tool.service no longer has
+  an [Install] WantedBy=default.target section: with the service enabled, the
+  user manager ran a backup ~20 s after every boot, before any session existed
+  (the cause of the boot-time "Not authorized" failures). Install/reload now
+  removes a stale default.target link for the service and a dangling link to
+  home-backup.service; the RPM %post does the same on upgrade and strips the
+  [Install] section from an existing unit.
+
 * Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-6
 - Each run now deletes stale .inprogress-* staging directories left on the
   backup drive by an interrupted backup, and rsync-*.log files older than a day

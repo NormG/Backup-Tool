@@ -360,7 +360,10 @@ running.
 Installed to `~/.config/systemd/user/`:
 
 **`backup-tool.service`** — runs `backup-tool backup auto`; type `oneshot`
-with a 1-hour stop timeout so large backups are not killed mid-run.
+with a 1-hour stop timeout so large backups are not killed mid-run.  It has no
+`[Install]` section on purpose: only the timer starts it.  Do **not** run
+`systemctl --user enable backup-tool.service`; that would start a backup at
+every boot, before anyone has logged in.
 
 **`backup-tool.timer`** — fires daily at the configured time; `Persistent=true`
 so a missed backup (e.g. machine was off) runs immediately on the next boot.
@@ -422,6 +425,21 @@ Not in the group: `sudo usermod -aG backup-tool $USER` (log out and in if it
 still fails).  Details, scope of the rule, how to allow an internal system disk,
 and how to reproduce the unattended case without rebooting are in
 [docs/unattended-mount.md](docs/unattended-mount.md).
+
+### A backup starts at every boot
+
+The service itself was enabled, so the user manager started it about 20
+seconds after each boot (and, before the polkit rule, failed because no one was
+logged in).  Check and fix:
+
+```bash
+ls ~/.config/systemd/user/default.target.wants/ | grep backup   # should print nothing
+systemctl --user disable backup-tool.service                     # remove the hook
+```
+
+The timer (`backup-tool.timer`) stays enabled and still catches up on a missed
+run after a boot or a resume from suspend (`Persistent=true`).  Reinstalling
+the RPM, or saving the schedule in the app, also removes the stale link.
 
 ### The scheduled full backup keeps being deferred
 
