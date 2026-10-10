@@ -389,6 +389,41 @@ systemctl --user enable  --now backup-tool.timer
 
 ---
 
+## Troubleshooting
+
+### Backup fails with "Not authorized to perform operation"
+
+```
+udisksctl mount failed for /dev/sdX1: ... NotAuthorizedCanObtain: Not authorized to perform operation
+```
+
+The drive was not mounted and udisks2 needed polkit approval with nobody to
+answer the prompt.  Before a mount, Backup-Tool first checks whether the
+destination already exists or the drive is already mounted by UUID, and only
+then calls `udisksctl`.  An unattended mount (timer at boot, after resume, or
+before login) additionally needs the packaged polkit rule, because udisks2 then
+asks for `filesystem-mount-other-seat`.  Check:
+
+```bash
+id -nG | tr ' ' '\n' | grep -x backup-tool                    # you are in the group
+grep other-seat /usr/share/polkit-1/rules.d/50-backup-tool.rules # rule installed
+journalctl --user -u backup-tool.service --since today          # the actual error
+```
+
+Not in the group: `sudo usermod -aG backup-tool $USER` (log out and in if it
+still fails).  Details, scope of the rule, how to allow an internal system disk,
+and how to reproduce the unattended case without rebooting are in
+[docs/unattended-mount.md](docs/unattended-mount.md).
+
+### The scheduled full backup keeps being deferred
+
+A full backup is hardlinked and needs only about 2% of the drive free (see
+[Backup layout on drive](#backup-layout-on-drive)).  If the log still says
+"Space check failed", the drive really is nearly full: remove old `full-*`
+backups or lower `keep_full_snapshots`.
+
+---
+
 ## Uninstall
 
 ### RPM install
@@ -457,6 +492,8 @@ Backup-Tool/
 │   ├── backup-tool.png   128×128 app icon
 │   ├── backup-tool.svg   Scalable app icon
 │   └── backup-tool.desktop  Launcher template (@EXEC@ substituted on install)
+├── packaging/           polkit rule, sysusers.d group definition, RPM signing key
+├── docs/                unattended-mount.md (polkit), KANBAN.md
 ├── backup-tool.spec     RPM spec file
 ├── package-rpm.sh       Build script for Fedora RPM packages
 ├── install.sh           Build / install / uninstall / status script
@@ -469,14 +506,3 @@ Backup-Tool/
 ## License
 
 GPL-3.0-or-later
-
-## Fix for Mounting Issues
-
-This tool has been modified to prevent mounting issues when running via systemd. The fix ensures that:
-
-1. The backup tool checks if the destination path already exists
-2. If it exists, the tool proceeds with the backup without attempting to mount
-3. If it doesn't exist, the tool checks if the drive is already mounted by UUID
-4. Only attempts to mount if the drive is not already mounted
-
-This prevents the polkit authorization errors that occur when systemd user services try to mount drives without user interaction.
