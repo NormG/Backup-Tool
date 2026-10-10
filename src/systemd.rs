@@ -10,6 +10,8 @@ use crate::config::Config;
 
 const SERVICE: &str = "backup-tool.service";
 const TIMER: &str = "backup-tool.timer";
+/// Pre-0.1.7 name of the service; installs may still hold a dangling link to it.
+const LEGACY_SERVICE: &str = "home-backup.service";
 const APP_ID: &str = "backup-tool";
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -55,6 +57,12 @@ pub fn install(config: &Config) -> Result<String> {
     write_timer_unit(&sd_dir, h, m)?;
     log.push(format!("  Wrote {}", sd_dir.join(TIMER).display()));
 
+    for name in remove_boot_hook(&sd_dir) {
+        log.push(format!(
+            "  Removed stale default.target link for {name} (only the timer starts backups)"
+        ));
+    }
+
     // ── Reload & enable ───────────────────────────────────────────────────
     run_systemctl(&["daemon-reload"])?;
     log.push("  systemctl --user daemon-reload".to_string());
@@ -83,6 +91,7 @@ pub fn update_timer(config: &Config) -> Result<()> {
 
     write_service_unit(&sd_dir, &bin)?;
     write_timer_unit(&sd_dir, h, m)?;
+    remove_boot_hook(&sd_dir);
     run_systemctl(&["daemon-reload"])?;
     run_systemctl(&["enable", "--now", TIMER])?;
     Ok(())
@@ -128,6 +137,39 @@ pub fn timer_status_line() -> String {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// Remove links that make `backup-tool.service` start whenever the user
+/// manager starts (every boot with linger, every login).
+///
+/// The service is meant to be started only by `backup-tool.timer`. Enabling the
+/// service itself (`systemctl --user enable backup-tool.service`, or the old
+/// `[Install] WantedBy=default.target` this tool used to write) ran a backup
+/// about 20 seconds after boot, before any session exists, and duplicated the
+/// timer's own `Persistent=true` catch-up. Also removes a *dangling* link to
+/// the pre-rename `home-backup.service`. Only symlinks are removed; returns the
+/// unit names whose link was removed.
+fn remove_boot_hook(sd_dir: &Path) -> Vec<String> {
+    let wants = sd_dir.join("default.target.wants");
+    let mut removed = Vec::new();
+    for (name, only_if_dangling) in [(SERVICE, false), (LEGACY_SERVICE, true)] {
+        let link = wants.join(name);
+        let Ok(meta) = std::fs::symlink_metadata(&link) else {
+            continue;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        // exists() follows the link, so it is false only for a dangling one.
+        if only_if_dangling && link.exists() {
+            continue;
+        }
+        if std::fs::remove_file(&link).is_ok() {
+            removed.push(name.to_string());
+        }
+    }
+    removed
+}
+
+/// The service has deliberately no `[Install]` section: only the timer starts it.
 fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
     let svc = format!(
         "[Unit]\n\
@@ -142,10 +184,7 @@ fn write_service_unit(sd_dir: &Path, bin: &str) -> Result<()> {
          StandardOutput=journal\n\
          StandardError=journal\n\
          TimeoutStartSec=infinity\n\
-         TimeoutStopSec=3600\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n",
+         TimeoutStopSec=3600\n",
         data_dir = Config::data_dir().display(),
         bin = bin,
         app = APP_ID,
@@ -334,6 +373,95 @@ mod tests {
             "unexpected service Description:\n{svc}"
         );
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("backup-tool-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn service_unit_has_no_install_section_so_only_the_timer_starts_it() {
+        let dir = unique_dir("no-install");
+        write_service_unit(&dir, "/usr/bin/backup-tool").unwrap();
+        let svc = fs::read_to_string(dir.join(SERVICE)).unwrap();
+        assert!(!svc.contains("[Install]"), "service unit:\n{svc}");
+        assert!(!svc.contains("WantedBy"), "service unit:\n{svc}");
+        assert!(svc.contains("Type=oneshot"));
+
+        // The timer keeps its [Install] so `enable` of the timer still works.
+        write_timer_unit(&dir, 2, 0).unwrap();
+        let timer = fs::read_to_string(dir.join(TIMER)).unwrap();
+        assert!(
+            timer.contains("WantedBy=timers.target"),
+            "timer unit:\n{timer}"
+        );
+        assert!(timer.contains("Persistent=true"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_boot_hook_removes_service_link_and_dangling_legacy_link_only() {
+        use std::os::unix::fs::symlink;
+
+        let dir = unique_dir("boot-hook");
+        let wants = dir.join("default.target.wants");
+        fs::create_dir_all(&wants).unwrap();
+        // Real unit files the links point at.
+        fs::write(dir.join(SERVICE), "unit").unwrap();
+        fs::write(dir.join("other.service"), "unit").unwrap();
+        // The stray boot hook, a dangling legacy link, and an unrelated link.
+        symlink(dir.join(SERVICE), wants.join(SERVICE)).unwrap();
+        symlink(dir.join(LEGACY_SERVICE), wants.join(LEGACY_SERVICE)).unwrap(); // target missing
+        symlink(dir.join("other.service"), wants.join("other.service")).unwrap();
+
+        let mut removed = remove_boot_hook(&dir);
+        removed.sort();
+        assert_eq!(removed, [SERVICE, LEGACY_SERVICE]); // sorted by name
+        assert!(fs::symlink_metadata(wants.join(SERVICE)).is_err());
+        assert!(fs::symlink_metadata(wants.join(LEGACY_SERVICE)).is_err());
+        assert!(
+            fs::symlink_metadata(wants.join("other.service")).is_ok(),
+            "unrelated links must be left alone"
+        );
+        assert!(dir.join(SERVICE).exists(), "the unit file itself is kept");
+
+        // Idempotent.
+        assert!(remove_boot_hook(&dir).is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_boot_hook_keeps_a_legacy_link_whose_target_still_exists() {
+        use std::os::unix::fs::symlink;
+
+        let dir = unique_dir("boot-hook-live-legacy");
+        let wants = dir.join("default.target.wants");
+        fs::create_dir_all(&wants).unwrap();
+        fs::write(dir.join(LEGACY_SERVICE), "unit").unwrap();
+        symlink(dir.join(LEGACY_SERVICE), wants.join(LEGACY_SERVICE)).unwrap();
+
+        assert!(remove_boot_hook(&dir).is_empty());
+        assert!(fs::symlink_metadata(wants.join(LEGACY_SERVICE)).is_ok());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn remove_boot_hook_ignores_a_regular_file_and_a_missing_directory() {
+        let dir = unique_dir("boot-hook-edge");
+        assert!(remove_boot_hook(&dir).is_empty(), "no wants dir at all");
+
+        let wants = dir.join("default.target.wants");
+        fs::create_dir_all(&wants).unwrap();
+        fs::write(wants.join(SERVICE), "not a symlink").unwrap();
+        assert!(remove_boot_hook(&dir).is_empty());
+        assert!(
+            wants.join(SERVICE).exists(),
+            "regular files are never deleted"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }
