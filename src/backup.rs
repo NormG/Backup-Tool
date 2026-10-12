@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use chrono::Local;
+use chrono::{Datelike, Local, NaiveDate, Weekday};
 use std::{
     fs,
     io::Write,
@@ -19,8 +19,9 @@ pub enum BackupKind {
     /// Uses `--link-dest` pointing at the latest backup, hardlinking
     /// unchanged files so only deltas consume additional space.
     Incremental,
-    /// Decide automatically: full on the configured day-of-week or when no
-    /// full backup exists yet; incremental otherwise.
+    /// Decide automatically: full on the configured day-of-week, when no full
+    /// backup exists yet, or to catch up when that day passed without a full
+    /// (machine off or asleep); incremental otherwise.
     Auto,
     /// The incremental period has not elapsed since the last backup;
     /// exit cleanly without creating a new backup.
@@ -118,6 +119,25 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         }
         other => other,
     };
+    // An automatic run that became a full although today is not the full day,
+    // nothing is pending, and a full already exists can only be the catch-up
+    // rule: say so in the log so the unusual full is not a surprise.
+    if matches!(kind, BackupKind::Auto)
+        && effective_kind == BackupKind::Full
+        && !auto_wants_full
+        && newest_full_snapshot(&dest_root).is_some()
+    {
+        if let Ok(mut log) = open_log_append(&Config::log_path()) {
+            log_line(
+                &mut log,
+                &format!(
+                    "The scheduled full backup ({}) was missed (machine off or asleep); \
+                     running it now as a catch-up full backup",
+                    config.full_backup_day
+                ),
+            );
+        }
+    }
     if effective_kind == BackupKind::Skip {
         let msg = format!(
             "Backup skipped (incremental period {n}d — last backup is recent enough).",
@@ -805,6 +825,40 @@ fn is_full_backup_day(config: &Config) -> bool {
     today.eq_ignore_ascii_case(&config.full_backup_day)
 }
 
+/// Date of the most recent occurrence of the configured full-backup weekday on
+/// or before `today` (`today` itself when it is that weekday). `None` when
+/// `full_backup_day` is not a weekday name, in which case no catch-up applies.
+fn last_full_day_on_or_before(today: NaiveDate, full_backup_day: &str) -> Option<NaiveDate> {
+    let weekday: Weekday = full_backup_day.trim().parse().ok()?;
+    let days_back =
+        (today.weekday().num_days_from_monday() + 7 - weekday.num_days_from_monday()) % 7;
+    Some(today - chrono::Duration::days(i64::from(days_back)))
+}
+
+/// Date (from its name) of the newest `full-*` snapshot, if there is one.
+fn newest_full_date(dest_root: &Path) -> Option<NaiveDate> {
+    let path = newest_full_snapshot(dest_root)?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let ts = snapshot_timestamp(&name)?;
+    NaiveDate::parse_from_str(ts.get(..10)?, "%Y-%m-%d").ok()
+}
+
+/// True when a scheduled full-backup day has come and gone without a full
+/// backup being made: the most recent full day on or before `today` is later
+/// than the newest full snapshot. This is how a full is made up after the
+/// machine slept through (or was off for) its scheduled slot, instead of
+/// silently skipping that week's full.
+///
+/// False when there is no full at all (the "no full yet" rule handles that),
+/// when `full_backup_day` is not a weekday name, or when a full already exists
+/// on or after the most recent scheduled day (including a manual full).
+fn scheduled_full_missed(config: &Config, dest_root: &Path, today: NaiveDate) -> bool {
+    let Some(due) = last_full_day_on_or_before(today, &config.full_backup_day) else {
+        return false;
+    };
+    newest_full_date(dest_root).is_some_and(|newest| newest < due)
+}
+
 fn full_snapshot_exists_on_date(dest_root: &Path, date: &str) -> bool {
     dest_root
         .read_dir()
@@ -929,6 +983,12 @@ fn auto_kind_with_pending(
     }
 
     if is_full_day && !full_snapshot_already_satisfied(dest_root, scheduled_full_date) {
+        return BackupKind::Full;
+    }
+
+    // The scheduled day passed without a full (machine off or asleep through
+    // its slot): make it up on this run rather than waiting another week.
+    if scheduled_full_missed(config, dest_root, Local::now().date_naive()) {
         return BackupKind::Full;
     }
 
@@ -1412,7 +1472,177 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    // ── link_dest_args / full-backup space estimate ───────────────────────────
+    // ── scheduled-full catch-up ─────────────────────────────────────────────────────
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn last_full_day_on_or_before_finds_the_most_recent_scheduled_weekday() {
+        // 2026-10-11 is a Sunday.
+        assert_eq!(
+            last_full_day_on_or_before(ymd(2026, 10, 12), "Sunday"),
+            Some(ymd(2026, 10, 11)),
+            "Monday -> the Sunday before"
+        );
+        assert_eq!(
+            last_full_day_on_or_before(ymd(2026, 10, 11), "Sunday"),
+            Some(ymd(2026, 10, 11)),
+            "on the full day itself"
+        );
+        assert_eq!(
+            last_full_day_on_or_before(ymd(2026, 10, 10), "Sunday"),
+            Some(ymd(2026, 10, 4)),
+            "Saturday -> a week earlier, not tomorrow"
+        );
+        assert_eq!(
+            last_full_day_on_or_before(ymd(2026, 10, 14), "monday"),
+            Some(ymd(2026, 10, 12)),
+            "case-insensitive"
+        );
+        assert_eq!(
+            last_full_day_on_or_before(ymd(2026, 10, 14), "Neverday"),
+            None
+        );
+        assert_eq!(last_full_day_on_or_before(ymd(2026, 10, 14), ""), None);
+    }
+
+    fn sunday_config() -> Config {
+        Config {
+            full_backup_day: "Sunday".to_string(),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn scheduled_full_missed_when_the_full_day_passed_without_a_full() {
+        let dir = tmp_dir("full-missed-yes");
+        // Newest full is from the Sunday before last; Sunday 2026-10-11 is missing.
+        make_snapshot_dir(&dir, "full-2026-10-04_020246");
+        let cfg = sunday_config();
+        assert!(scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 12)), "Mon");
+        assert!(scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 15)), "Thu");
+        // On the full day itself, before its full has run.
+        assert!(scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 11)), "Sun");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scheduled_full_not_missed_in_a_normal_week() {
+        let dir = tmp_dir("full-missed-no");
+        // This week's Sunday full happened (the real Oct 11 2026 situation).
+        make_snapshot_dir(&dir, "full-2026-10-11_020246");
+        let cfg = sunday_config();
+        assert!(!scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 11)), "Sun");
+        assert!(!scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 12)), "Mon");
+        // Saturday, the day before next Sunday: the next full is not due yet.
+        assert!(!scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 17)), "Sat");
+        fs::remove_dir_all(&dir).unwrap();
+
+        // Before the full day, last week's Sunday full is still the current one.
+        let dir = tmp_dir("full-missed-no-saturday");
+        make_snapshot_dir(&dir, "full-2026-10-04_020246");
+        assert!(!scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 10)), "Sat");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scheduled_full_not_missed_after_a_later_manual_full() {
+        let dir = tmp_dir("full-missed-manual");
+        make_snapshot_dir(&dir, "full-2026-10-04_020246");
+        // A manual full on Monday satisfies the missed Sunday.
+        make_snapshot_dir(&dir, "full-2026-10-12_091500");
+        assert!(!scheduled_full_missed(
+            &sunday_config(),
+            &dir,
+            ymd(2026, 10, 12)
+        ));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scheduled_full_missed_is_false_without_a_full_or_a_valid_weekday() {
+        let empty = tmp_dir("full-missed-nofull");
+        make_snapshot_dir(&empty, "inc-2026-10-05_020000");
+        assert!(
+            !scheduled_full_missed(&sunday_config(), &empty, ymd(2026, 10, 12)),
+            "no full at all is handled by the 'no full yet' rule"
+        );
+        fs::remove_dir_all(&empty).unwrap();
+
+        let dir = tmp_dir("full-missed-badday");
+        make_snapshot_dir(&dir, "full-2020-01-01_020000");
+        let cfg = Config {
+            full_backup_day: "Neverday".to_string(),
+            ..Config::default()
+        };
+        assert!(!scheduled_full_missed(&cfg, &dir, ymd(2026, 10, 12)));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Date `days` ago as `YYYY-MM-DD`.
+    fn days_ago(days: i64) -> String {
+        (Local::now().date_naive() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    /// Weekday name of the date `days` ago.
+    fn weekday_days_ago(days: i64) -> String {
+        (Local::now().date_naive() - chrono::Duration::days(days))
+            .format("%A")
+            .to_string()
+    }
+
+    #[test]
+    fn auto_kind_makes_up_a_missed_scheduled_full() {
+        let dir = tmp_dir("auto-catchup");
+        // The scheduled day was yesterday (so today is not the full day), and
+        // the newest full predates it: yesterday's full never happened.
+        make_snapshot_dir(&dir, &format!("full-{}_020000", days_ago(9)));
+        let cfg = Config {
+            full_backup_day: weekday_days_ago(1),
+            ..Config::default()
+        };
+        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Full);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_stays_incremental_when_the_scheduled_full_happened() {
+        let dir = tmp_dir("auto-no-catchup");
+        // Yesterday was the full day and its full exists: today is a normal
+        // incremental day (this is Monday after a Sunday full).
+        make_snapshot_dir(&dir, &format!("full-{}_020246", days_ago(1)));
+        let cfg = Config {
+            full_backup_day: weekday_days_ago(1),
+            incremental_every_n_days: 1,
+            ..Config::default()
+        };
+        assert_eq!(
+            auto_kind(&cfg, &dir, false).unwrap(),
+            BackupKind::Incremental
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_does_not_repeat_the_catch_up_after_a_manual_full_today() {
+        let dir = tmp_dir("auto-manual-full");
+        make_snapshot_dir(&dir, &format!("full-{}_020000", days_ago(9)));
+        make_snapshot_dir(&dir, &format!("full-{}_081500", days_ago(0)));
+        let cfg = Config {
+            full_backup_day: weekday_days_ago(1),
+            incremental_every_n_days: 1,
+            ..Config::default()
+        };
+        // The manual full today satisfies the missed day; nothing else is due.
+        assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Skip);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── link_dest_args / full-backup space estimate ────────────────────────────────────────
 
     #[test]
     fn link_dest_args_incremental_hardlinks_without_checksum() {
