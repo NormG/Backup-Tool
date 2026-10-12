@@ -106,8 +106,8 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
     };
 
     let pending_retry = matches!(kind, BackupKind::Auto) && pending_full::pending_full_for_auto()?;
-    let effective_kind = match kind {
-        BackupKind::Auto => auto_kind_with_pending(
+    let (effective_kind, catch_up_full) = match kind {
+        BackupKind::Auto => auto_kind_with_reason(
             config,
             &dest_root,
             pending_retry || auto_wants_full,
@@ -117,16 +117,12 @@ pub fn run(config: &Config, kind: BackupKind) -> Result<String> {
         BackupKind::Skip => {
             return Ok("Backup skipped (called with Skip kind directly).".to_string());
         }
-        other => other,
+        other => (other, false),
     };
-    // An automatic run that became a full although today is not the full day,
-    // nothing is pending, and a full already exists can only be the catch-up
-    // rule: say so in the log so the unusual full is not a surprise.
-    if matches!(kind, BackupKind::Auto)
-        && effective_kind == BackupKind::Full
-        && !auto_wants_full
-        && newest_full_snapshot(&dest_root).is_some()
-    {
+    // `catch_up_full` is set by the decision itself, only when the catch-up rule
+    // chose the full (never inferred from other state, which can change while
+    // this run waited for the lock), so the log always gives the real reason.
+    if catch_up_full {
         if let Ok(mut log) = open_log_append(&Config::log_path()) {
             log_line(
                 &mut log,
@@ -949,6 +945,9 @@ fn auto_kind(config: &Config, dest_root: &Path, pending_retry: bool) -> Result<B
     ))
 }
 
+/// The decision without the catch-up flag; used by the tests. Production code
+/// calls [`auto_kind_with_reason`] directly.
+#[cfg(test)]
 fn auto_kind_with_pending(
     config: &Config,
     dest_root: &Path,
@@ -956,6 +955,27 @@ fn auto_kind_with_pending(
     scheduled_full_date: Option<&str>,
     pending_since: Option<&str>,
 ) -> BackupKind {
+    auto_kind_with_reason(
+        config,
+        dest_root,
+        pending_full,
+        scheduled_full_date,
+        pending_since,
+    )
+    .0
+}
+
+/// [`auto_kind_with_pending`], also reporting whether a full was chosen *only*
+/// by the catch-up rule (a scheduled full day passed without a full). The flag
+/// is false for every other reason a full is chosen (full day, pending retry,
+/// no full yet), and the pending retry takes precedence over the catch-up.
+fn auto_kind_with_reason(
+    config: &Config,
+    dest_root: &Path,
+    pending_full: bool,
+    scheduled_full_date: Option<&str>,
+    pending_since: Option<&str>,
+) -> (BackupKind, bool) {
     if pending_full {
         if full_snapshot_already_satisfied(dest_root, scheduled_full_date)
             || pending_full_already_resolved(dest_root, pending_since)
@@ -963,7 +983,7 @@ fn auto_kind_with_pending(
             // Full already landed (e.g. clear failed after success) — heal state.
             let _ = pending_full::clear_pending_after_success();
         } else {
-            return BackupKind::Full;
+            return (BackupKind::Full, false);
         }
     }
 
@@ -979,17 +999,17 @@ fn auto_kind_with_pending(
         .unwrap_or(false);
 
     if !full_exists {
-        return BackupKind::Full;
+        return (BackupKind::Full, false);
     }
 
     if is_full_day && !full_snapshot_already_satisfied(dest_root, scheduled_full_date) {
-        return BackupKind::Full;
+        return (BackupKind::Full, false);
     }
 
     // The scheduled day passed without a full (machine off or asleep through
     // its slot): make it up on this run rather than waiting another week.
     if scheduled_full_missed(config, dest_root, Local::now().date_naive()) {
-        return BackupKind::Full;
+        return (BackupKind::Full, true);
     }
 
     // Check whether the incremental period has elapsed since the last snapshot.
@@ -1017,13 +1037,13 @@ fn auto_kind_with_pending(
                     let today_date = Local::now().date_naive();
                     let days_since = (today_date - date).num_days();
                     if days_since < i64::from(period) {
-                        return BackupKind::Skip;
+                        return (BackupKind::Skip, false);
                     }
                 }
             }
         }
     }
-    BackupKind::Incremental
+    (BackupKind::Incremental, false)
 }
 
 /// Find the most-recently-modified snapshot directory (full or inc) under
@@ -1639,6 +1659,61 @@ mod tests {
         };
         // The manual full today satisfies the missed day; nothing else is due.
         assert_eq!(auto_kind(&cfg, &dir, false).unwrap(), BackupKind::Skip);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_kind_reports_catch_up_only_when_that_rule_chose_the_full() {
+        let cfg = |day: String| Config {
+            full_backup_day: day,
+            ..Config::default()
+        };
+
+        // Catch-up: yesterday was the full day and the newest full predates it.
+        let dir = tmp_dir("reason-catchup");
+        make_snapshot_dir(&dir, &format!("full-{}_020000", days_ago(9)));
+        assert_eq!(
+            auto_kind_with_reason(&cfg(weekday_days_ago(1)), &dir, false, None, None),
+            (BackupKind::Full, true)
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        // A pending (deferred-full) retry takes precedence: still a full, but
+        // the reason is the retry, not a missed day, even though a full day was
+        // also missed. This is the case where the log must not blame the miss.
+        let dir = tmp_dir("reason-pending");
+        make_snapshot_dir(&dir, &format!("full-{}_020000", days_ago(9)));
+        assert_eq!(
+            auto_kind_with_reason(&cfg(weekday_days_ago(1)), &dir, true, None, None),
+            (BackupKind::Full, false)
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        // Today is the full day: a full, but not a catch-up.
+        let dir = tmp_dir("reason-fullday");
+        make_snapshot_dir(&dir, &format!("full-{}_020000", days_ago(9)));
+        assert_eq!(
+            auto_kind_with_reason(&cfg(weekday_days_ago(0)), &dir, false, None, None),
+            (BackupKind::Full, false)
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        // No full yet: a full, but not a catch-up.
+        let dir = tmp_dir("reason-nofull");
+        make_snapshot_dir(&dir, &format!("inc-{}_020000", days_ago(2)));
+        assert_eq!(
+            auto_kind_with_reason(&cfg(weekday_days_ago(1)), &dir, false, None, None),
+            (BackupKind::Full, false)
+        );
+        fs::remove_dir_all(&dir).unwrap();
+
+        // Nothing missed: incremental, flag false.
+        let dir = tmp_dir("reason-normal");
+        make_snapshot_dir(&dir, &format!("full-{}_020246", days_ago(1)));
+        assert_eq!(
+            auto_kind_with_reason(&cfg(weekday_days_ago(1)), &dir, false, None, None),
+            (BackupKind::Incremental, false)
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
