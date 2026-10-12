@@ -211,7 +211,7 @@ Requires `btrfs-progs`: `sudo dnf install btrfs-progs`
 The same binary is called by systemd when the timer fires:
 
 ```bash
-backup-tool backup auto         # full on configured day, incremental otherwise
+backup-tool backup auto         # full on the configured day (or to make up a missed one), else incremental
 backup-tool backup full         # force a full backup
 backup-tool backup incremental  # force an incremental backup
 ```
@@ -302,6 +302,15 @@ share disk blocks with the full (or previous incremental) they were derived from
   killed `backup-tool`; if `/proc` cannot be inspected nothing is deleted.
   Only real directories directly under the destination are removed; symlinks
   and plain files with that prefix are never touched or followed.
+- **Missed full backups are made up** — a full backup normally runs on the
+  configured day.  If the machine was off or asleep through that day, the next
+  automatic run becomes a full backup instead of an incremental (the log says
+  "missed … running it now as a catch-up full backup").  The rule: the most
+  recent scheduled full day on or before today is later than the newest `full-*`
+  snapshot.  A normal week is unaffected (the Monday after a Sunday full is an
+  incremental), and a manual full satisfies a missed day.  The catch-up runs
+  whenever the machine wakes, so it can start in the morning rather than at the
+  scheduled time, and it takes as long as any full (it re-reads everything).
 - **Weekly log rotation** — on each successful full backup, operational log
   lines (`[timestamp] …`) are archived into that full backup under
   `.backup-tool/backup.log` and the active log is truncated.  Per-file rsync

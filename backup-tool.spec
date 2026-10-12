@@ -5,7 +5,7 @@
 #   rpm -K backup-tool-*.rpm
 Name:           backup-tool
 Version:        0.1.13
-Release:        7%{?dist}
+Release:        8%{?dist}
 Summary:        Backup-Tool — GTK4 rsync backup manager with systemd timer
 
 License:        GPL-3.0-or-later
@@ -233,6 +233,13 @@ update-desktop-database -q %{_datadir}/applications          &>/dev/null || :
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 %changelog
+* Mon Oct 12 2026 norm <norm@localhost> - 0.1.13-8
+- A missed scheduled full backup is made up: when the most recent full-backup
+  day on or before today is later than the newest full snapshot (machine off or
+  asleep through its slot), the next automatic run is a full backup instead of an
+  incremental, and the log says so. A normal week (full on its day, incrementals
+  after) and a later manual full are unaffected.
+
 * Sat Oct 10 2026 norm <norm@localhost> - 0.1.13-7
 - Only the timer starts backups. The generated backup-tool.service no longer has
   an [Install] WantedBy=default.target section: with the service enabled, the
